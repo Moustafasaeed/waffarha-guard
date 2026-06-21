@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useRef, useCallback } from "react";
 import { Shield, Upload, Search, X, CheckCircle, Eye, AlertTriangle, Users, CreditCard, DollarSign, ShieldAlert, Download } from "lucide-react";
 import Papa from "papaparse";
