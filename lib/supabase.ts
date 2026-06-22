@@ -14,7 +14,8 @@ export type Platform =
   | "paymob_wallets"
   | "paymob_bnpl"
   | "fawry"
-  | "admin";
+  | "admin"
+  | "promo";
 
 export type AlertType =
   | "multi_cc"
@@ -25,7 +26,11 @@ export type AlertType =
   | "pay_method_abuse"
   | "suspected_trials"
   | "recharge_abuser"
-  | "fawry_suspected";
+  | "fawry_suspected"
+  | "promo_high_discount"
+  | "promo_same_card"
+  | "promo_same_wallet"
+  | "promo_fake_domain";
 
 export interface UploadSessionPayload {
   platform: Platform;
@@ -320,6 +325,68 @@ export function buildAdminAlerts(
       customer_names: r.emails ?? [],
       payment_methods: [],
       total_amount: r.totalAmt ?? 0,
+      transaction_count: r.txCount ?? 0,
+      reasons: r.reasons ?? [],
+      detail: r,
+    })),
+  ];
+}
+
+export function buildPromoAlerts(
+  highDiscount: any[],
+  sameCard: any[],
+  sameWallet: any[],
+  fakeDom: any[]
+): FraudAlertPayload[] {
+  return [
+    ...highDiscount.map((r) => ({
+      platform: "promo" as Platform,
+      alert_type: "promo_high_discount" as AlertType,
+      risk_level: "HighDiscount",
+      entity_email: r.email,
+      entity_identifier: r.email,
+      customer_names: r.custNames ?? [],
+      payment_methods: r.promoCodes ?? [],
+      total_amount: r.totalDiscount ?? 0,
+      transaction_count: r.txCount ?? 0,
+      reasons: r.reasons ?? [],
+      detail: r,
+    })),
+    ...sameCard.map((r) => ({
+      platform: "promo" as Platform,
+      alert_type: "promo_same_card" as AlertType,
+      risk_level: r.risk,
+      entity_email: null,
+      entity_identifier: r.card,
+      customer_names: r.emails ?? [],
+      payment_methods: [r.card],
+      total_amount: r.totalDiscount ?? 0,
+      transaction_count: r.txCount ?? 0,
+      reasons: r.reasons ?? [],
+      detail: r,
+    })),
+    ...sameWallet.map((r) => ({
+      platform: "promo" as Platform,
+      alert_type: "promo_same_wallet" as AlertType,
+      risk_level: r.risk,
+      entity_email: null,
+      entity_identifier: r.wallet,
+      customer_names: r.emails ?? [],
+      payment_methods: [r.wallet],
+      total_amount: r.totalDiscount ?? 0,
+      transaction_count: r.txCount ?? 0,
+      reasons: r.reasons ?? [],
+      detail: r,
+    })),
+    ...fakeDom.map((r) => ({
+      platform: "promo" as Platform,
+      alert_type: "promo_fake_domain" as AlertType,
+      risk_level: "FakeDomain",
+      entity_email: r.email,
+      entity_identifier: r.email,
+      customer_names: r.custNames ?? [],
+      payment_methods: r.promoCodes ?? [],
+      total_amount: r.totalDiscount ?? 0,
       transaction_count: r.txCount ?? 0,
       reasons: r.reasons ?? [],
       detail: r,
