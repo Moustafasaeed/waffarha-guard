@@ -595,9 +595,29 @@ export default function App(){
   const fawryBadge=fawryHighAmt.length+fawrySuspected.length+fawryFakeDom.length;
   const promoBadge=promoHighDiscount.length+promoSameCard.length+promoSameWallet.length+promoFakeDomain.length;
 
-  // ── Load / refresh blocked emails from Supabase ──
-  // Must be before the early return to satisfy React hooks rules
-  const refreshBlocked=async()=>{const rows=await loadBlockedEmails();setBlockedList(rows);setBlockedEmails(new Set(rows.map(r=>r.entity_value)));};
+  // ── Blocked emails — localStorage (primary) + Supabase (sync) ──
+  // localStorage helpers
+  const BK="wg_blocked";
+  const lsGetBlocked=()=>{try{return JSON.parse(localStorage.getItem(BK)||"[]");}catch{return[];}};
+  const lsSaveBlocked=(list)=>{try{localStorage.setItem(BK,JSON.stringify(list));}catch{}};
+
+  const refreshBlocked=async()=>{
+    // Always start from localStorage (guaranteed to work)
+    const local=lsGetBlocked();
+    setBlockedList(local);
+    setBlockedEmails(new Set(local.map(r=>r.entity_value)));
+    // Try to merge remote entries (best-effort, don't wipe local on failure)
+    try{
+      const remote=await loadBlockedEmails();
+      if(remote&&remote.length>0){
+        const merged=[...local];
+        remote.forEach(r=>{if(!merged.find(m=>m.entity_value===r.entity_value))merged.push(r);});
+        lsSaveBlocked(merged);
+        setBlockedList(merged);
+        setBlockedEmails(new Set(merged.map(r=>r.entity_value)));
+      }
+    }catch(e){/* Supabase unavailable — localStorage is source of truth */}
+  };
   useEffect(()=>{if(currentUser)refreshBlocked();},[currentUser?.username]);
 
   if(!currentUser)return <LoginScreen onLogin={setCurrentUser}/>;
@@ -607,21 +627,29 @@ export default function App(){
   const handleBlock=async(email,platform)=>{
     if(!email)return;
     const key=email.toLowerCase().trim();
-    // Optimistic: update local state immediately so card disappears right away
+    const entry={entity_value:key,blocked_by:currentUser.username,platform:platform||null,note:null,created_at:new Date().toISOString()};
+    // 1. Write localStorage immediately — this is the source of truth
+    const current=lsGetBlocked();
+    const updated=[entry,...current.filter(b=>b.entity_value!==key)];
+    lsSaveBlocked(updated);
+    // 2. Update React state immediately — card disappears now
     setBlockedEmails(prev=>new Set([...prev,key]));
-    setBlockedList(prev=>[{entity_value:key,blocked_by:currentUser.username,platform:platform||null,note:null,created_at:new Date().toISOString()},...prev.filter(b=>b.entity_value!==key)]);
+    setBlockedList(updated);
     setBlockingEmail(key);
-    try{await blockEmail(key,currentUser.username,platform||"unknown");}catch(e){console.error("blockEmail error:",e);}
-    await refreshBlocked();
+    // 3. Try Supabase in background — best effort, never wipes local state
+    try{await blockEmail(key,currentUser.username,platform||"unknown");}catch(e){console.error("blockEmail:",e);}
     setBlockingEmail(null);
   };
   const handleUnblock=async(email)=>{
     const key=email.toLowerCase().trim();
-    // Optimistic: remove from local state immediately
+    // 1. Remove from localStorage immediately
+    const updated=lsGetBlocked().filter(b=>b.entity_value!==key);
+    lsSaveBlocked(updated);
+    // 2. Update React state immediately
     setBlockedEmails(prev=>{const n=new Set(prev);n.delete(key);return n;});
-    setBlockedList(prev=>prev.filter(b=>b.entity_value!==key));
-    try{await unblockEmail(key);}catch(e){console.error("unblockEmail error:",e);}
-    await refreshBlocked();
+    setBlockedList(updated);
+    // 3. Try Supabase in background
+    try{await unblockEmail(key);}catch(e){console.error("unblockEmail:",e);}
   };
 
   // Filters an array of email-centric results against the current blocked set
