@@ -108,6 +108,7 @@ function ResultCard({r,accentColor,cfg={},activeFilter,customRows,customHeader})
   const hideAuthMsg=cfg.hideAuthMsg===true;
   const hideStatus=cfg.hideStatus===true;
   const showBiller=cfg.showBiller===true;
+  const showPayMethod=cfg.showPayMethod===true;
 
   // Build flat tx rows from ccTxRows
   const allTxRows=[];
@@ -117,7 +118,7 @@ function ResultCard({r,accentColor,cfg={},activeFilter,customRows,customHeader})
   const authClr=msg=>{if(["Authorised","Authorized"].includes(msg))return"#16a34a";if(msg==="User does not have a wallet")return"#dc2626";return"#475569";};
 
   const tableRows=customRows||allTxRows;
-  const tableHeader=customHeader||[ccLabel,cartLabel,"Timestamp",...(hideAuthMsg?[]:["Auth Message"]),...(hideStatus?[]:["Status"]),...(showBiller?["Service Biller"]:[]),...(showECI?["ECI"]:[]),...(showCountries?["Countries"]:[]),"Amount (EGP)"];
+  const tableHeader=customHeader||[ccLabel,cartLabel,"Timestamp",...(hideAuthMsg?[]:["Auth Message"]),...(hideStatus?[]:["Status"]),...(showBiller?["Service Biller"]:[]),...(showPayMethod?["Payment Method"]:[]),...(showECI?["ECI"]:[]),...(showCountries?["Countries"]:[]),"Amount (EGP)"];
 
   return(
     <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 12px rgba(0,0,0,0.07)",border:`1px solid ${accentColor}22`,marginBottom:16,overflow:"hidden"}}>
@@ -201,6 +202,8 @@ function ResultCard({r,accentColor,cfg={},activeFilter,customRows,customHeader})
                     </td>}
                     {/* Service Biller */}
                     {showBiller&&<td style={{padding:"9px 14px",whiteSpace:"nowrap"}}>{tx.biller?<span style={{background:"#fef3c7",color:"#92400e",border:"1px solid #fde68a",padding:"2px 9px",borderRadius:6,fontSize:11,fontWeight:600}}>{tx.biller}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td>}
+                    {/* Payment Method */}
+                    {showPayMethod&&<td style={{padding:"9px 14px",whiteSpace:"nowrap"}}>{tx.payMethod?<span style={{background:"#eff6ff",color:"#2563eb",border:"1px solid #bfdbfe",padding:"2px 9px",borderRadius:6,fontSize:11,fontWeight:600}}>{tx.payMethod}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td>}
                     {/* ECI */}
                     {tx.eci!==undefined&&<td style={{padding:"9px 14px",fontFamily:"monospace",fontWeight:700,color:"#334155",fontSize:12}}>{tx.eci||"—"}</td>}
                     {/* Countries */}
@@ -285,10 +288,76 @@ function WalletAbuserCard({r,accent}){
 }
 
 // ─── Universal Dashboard ──────────────────────────────────────────────────────
+// ─── Claude Analysis Panel ────────────────────────────────────────────────────
+function ClaudeAnalysisPanel({state,accent}){
+  const{loading,data,error}=state;
+  const riskColors={"low":"#16a34a","medium":"#d97706","high":"#dc2626","critical":"#7f1d1d"};
+  const riskBg={"low":"#dcfce7","medium":"#fef3c7","high":"#fee2e2","critical":"#fce7f3"};
+  const analysis=data?.analysis;
+  const meta=data?.meta;
+  return(
+    <div style={{background:"#0f172a",borderRadius:16,padding:"20px 24px",marginBottom:20,border:"1px solid #1e293b",boxShadow:"0 4px 20px rgba(0,0,0,0.15)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <div style={{width:32,height:32,borderRadius:8,background:"#7c3aed22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>🤖</div>
+        <div>
+          <div style={{fontWeight:800,fontSize:15,color:"#f8fafc"}}>Claude AI Analysis</div>
+          {meta&&<div style={{fontSize:11,color:"#475569"}}>{meta.emailsChecked} emails checked · {meta.historicalHits} historical records · {meta.repeatOffenderCount} repeat offenders · {meta.crossPlatformCount} cross-platform</div>}
+        </div>
+        {analysis?.risk_level&&<div style={{marginLeft:"auto",padding:"4px 14px",borderRadius:20,background:riskBg[analysis.risk_level]||"#f1f5f9",color:riskColors[analysis.risk_level]||"#334155",fontWeight:800,fontSize:12,textTransform:"uppercase",letterSpacing:0.5}}>{analysis.risk_level} RISK</div>}
+      </div>
+      {loading&&<div style={{display:"flex",alignItems:"center",gap:10,color:"#64748b",padding:"20px 0"}}><div style={{width:18,height:18,border:"2px solid #334155",borderTop:"2px solid #7c3aed",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/><span>Analyzing patterns with Claude Opus 4.8…</span></div>}
+      {error&&<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"12px 16px",color:"#dc2626",fontSize:13}}>⚠ Analysis failed: {error}</div>}
+      {analysis&&<>
+        {analysis.executive_summary&&<div style={{background:"#1e293b",borderRadius:10,padding:"14px 16px",marginBottom:14,fontSize:13,color:"#cbd5e1",lineHeight:1.7}}>{analysis.executive_summary}</div>}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+          {analysis.key_patterns?.length>0&&(
+            <div style={{background:"#1e293b",borderRadius:10,padding:"14px 16px"}}>
+              <div style={{fontWeight:700,color:"#94a3b8",fontSize:11,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Key Patterns</div>
+              {analysis.key_patterns.map((p,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:6}}><span style={{color:"#7c3aed",fontSize:14,lineHeight:1}}>›</span><span style={{fontSize:12,color:"#cbd5e1",lineHeight:1.5}}>{p}</span></div>)}
+            </div>
+          )}
+          {analysis.predicted_next_moves?.length>0&&(
+            <div style={{background:"#1e293b",borderRadius:10,padding:"14px 16px"}}>
+              <div style={{fontWeight:700,color:"#94a3b8",fontSize:11,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Predicted Next Moves</div>
+              {analysis.predicted_next_moves.map((p,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:6}}><span style={{color:"#f59e0b",fontSize:14,lineHeight:1}}>⚡</span><span style={{fontSize:12,color:"#cbd5e1",lineHeight:1.5}}>{p}</span></div>)}
+            </div>
+          )}
+        </div>
+        {analysis.repeat_offenders?.length>0&&(
+          <div style={{background:"#1e293b",borderRadius:10,padding:"14px 16px",marginBottom:14}}>
+            <div style={{fontWeight:700,color:"#94a3b8",fontSize:11,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Repeat Offenders ({analysis.repeat_offenders.length})</div>
+            {analysis.repeat_offenders.map((r,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:5}}><span style={{color:"#dc2626",fontSize:14,lineHeight:1,flexShrink:0}}>●</span><span style={{fontSize:12,color:"#fca5a5",fontFamily:"monospace",lineHeight:1.5}}>{r}</span></div>)}
+          </div>
+        )}
+        {analysis.cross_platform_activity?.length>0&&(
+          <div style={{background:"#1e293b",borderRadius:10,padding:"14px 16px",marginBottom:14}}>
+            <div style={{fontWeight:700,color:"#94a3b8",fontSize:11,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Cross-Platform Activity</div>
+            {analysis.cross_platform_activity.map((c,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:5}}><span style={{color:"#f59e0b",fontSize:14,lineHeight:1}}>↔</span><span style={{fontSize:12,color:"#fcd34d",lineHeight:1.5}}>{c}</span></div>)}
+          </div>
+        )}
+        {analysis.priority_actions?.length>0&&(
+          <div style={{background:"#1e293b",borderRadius:10,padding:"14px 16px",marginBottom:14}}>
+            <div style={{fontWeight:700,color:"#94a3b8",fontSize:11,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Priority Actions</div>
+            {analysis.priority_actions.map((a,i)=>{const ac=a.action==="block"?"#dc2626":a.action==="escalate"?"#d97706":"#2563eb";return(<div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:8,padding:"8px 12px",background:"#0f172a",borderRadius:8,border:`1px solid ${ac}33`}}><span style={{padding:"2px 8px",background:ac+"22",color:ac,borderRadius:4,fontSize:10,fontWeight:700,textTransform:"uppercase",flexShrink:0,marginTop:1}}>{a.action}</span><div><div style={{fontSize:12,color:"#f8fafc",fontWeight:600,marginBottom:2}}>{a.target}</div><div style={{fontSize:11,color:"#64748b"}}>{a.reason}</div></div></div>);}) }
+          </div>
+        )}
+        {analysis.recommendations?.length>0&&(
+          <div style={{background:"#1e293b",borderRadius:10,padding:"14px 16px"}}>
+            <div style={{fontWeight:700,color:"#94a3b8",fontSize:11,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Recommendations</div>
+            {analysis.recommendations.map((r,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:6}}><span style={{color:"#16a34a",fontSize:14,lineHeight:1}}>✓</span><span style={{fontSize:12,color:"#a7f3d0",lineHeight:1.5}}>{r}</span></div>)}
+          </div>
+        )}
+      </>}
+    </div>
+  );
+}
+
 function UniversalDashboard({config}){
-  const{accent,reimportLabel,raw,enriched,tabs,stats,onReimport,showRaw,setShowRaw,previewCols,previewKeyFn,onDownload}=config;
+  const{accent,reimportLabel,raw,enriched,tabs,stats,onReimport,showRaw,setShowRaw,previewCols,previewKeyFn,onDownload,analysisPayload}=config;
   const [activeTab,setActiveTab]=useState(tabs[0].id);
   const [search,setSearch]=useState("");
+  const [claudeState,setClaudeState]=useState({loading:false,data:null,error:null});
+  const handleAnalyze=async()=>{if(!analysisPayload)return;setClaudeState({loading:true,data:null,error:null});try{const res=await fetch("/api/analyze-fraud",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(analysisPayload)});const json=await res.json();if(!res.ok)throw new Error(json.error||"Analysis failed");setClaudeState({loading:false,data:json,error:null});}catch(e){setClaudeState({loading:false,data:null,error:e.message});}};
 
   const activeTabCfg=tabs.find(t=>t.id===activeTab)||tabs[0];
   const baseRows=activeTabCfg.rows||[];
@@ -300,7 +369,10 @@ function UniversalDashboard({config}){
     {/* Header */}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
       <div><div style={{fontWeight:800,fontSize:18,color:"#0f172a"}}>{reimportLabel} Fraud Report</div><div style={{fontSize:13,color:"#64748b",marginTop:3}}>{raw.length.toLocaleString()} records · {uniqueEmails.toLocaleString()} unique customers</div></div>
-      <button onClick={onReimport} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",background:accent,color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600}}><Upload size={13}/> Re-import</button>
+      <div style={{display:"flex",gap:8}}>
+        {analysisPayload&&<button onClick={handleAnalyze} disabled={claudeState.loading} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",background:claudeState.loading?"#4c1d95":"#7c3aed",color:"#fff",border:"none",borderRadius:8,cursor:claudeState.loading?"not-allowed":"pointer",fontSize:13,fontWeight:600,opacity:claudeState.loading?0.8:1,transition:"opacity 0.2s"}}>{claudeState.loading?"🤖 Analyzing…":"🤖 Claude Analysis"}</button>}
+        <button onClick={onReimport} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",background:accent,color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600}}><Upload size={13}/> Re-import</button>
+      </div>
     </div>
 
     {/* Stats */}
@@ -315,6 +387,9 @@ function UniversalDashboard({config}){
         </div>
       ))}
     </div>
+
+    {/* Claude Analysis Panel */}
+    {(claudeState.loading||claudeState.data||claudeState.error)&&<ClaudeAnalysisPanel state={claudeState} accent={accent}/>}
 
     {/* Filter + Search bar */}
     <div style={{background:"#fff",borderRadius:14,padding:"14px 18px",marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
@@ -581,6 +656,7 @@ export default function App(){
     previewCols:["Customer Email","Customer Name","Payment Description","Expiry Year","Expiry Month","Issuer Country","Cart ID"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(ptFraud,ptHighAmt,ptFakeDom,"PayTabs"),
+    analysisPayload:ptRaw.length>0?{platform:"PayTabs",recordCount:ptRaw.length,fraud:ptFraud,highAmt:ptHighAmt,fakeDom:ptFakeDom}:undefined,
   };
 
   // ── Noon dashboard config ──
@@ -599,6 +675,7 @@ export default function App(){
     previewCols:["User Email","User Name","Payerinfo","Merchantorderreference","Orderdate_UTC","Issuercountry","Responsemessage","Orderstatus"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(noonFraud,noonHighAmt,noonFakeDom,"Noon"),
+    analysisPayload:noonMerged.length>0?{platform:"Noon",recordCount:noonMerged.length,fraud:noonFraud,highAmt:noonHighAmt,fakeDom:noonFakeDom}:undefined,
   };
 
   // ── PayMob wallets dashboard config ──
@@ -618,6 +695,7 @@ export default function App(){
     previewCols:["client_email","client_name","client_phone","merchant_order_id","created_at","data_message_execl","success","amount_whole"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(pmWFraud,pmWHighAmt,pmWFakeDom,"PayMob_Wallets"),
+    analysisPayload:pmRaw.length>0?{platform:"PayMob Wallets",recordCount:pmRaw.length,fraud:pmWFraud,highAmt:pmWHighAmt,fakeDom:pmWFakeDom,otherFlags:pmWalletAbusers.map(r=>({email:r.emails?.[0]||"",wallet:r.wallet,risk:r.risk,txCount:r.txCount,reasons:r.reasons}))}:undefined,
   };
 
   // ── PayMob BNPL config ──
@@ -633,11 +711,12 @@ export default function App(){
     previewCols:["client_email","client_name","payment_method","merchant_order_id","created_at","success","amount_whole"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(pmBFraud,pmBHighAmt,[],"PayMob_BNPL"),
+    analysisPayload:pmRaw.length>0?{platform:"PayMob BNPL",recordCount:pmRaw.length,fraud:pmBFraud,highAmt:pmBHighAmt,fakeDom:[]}:undefined,
   };
 
   // ── Admin dashboard config ──
   // Admin: build ccTxRows using real sheet fields (no authMsg, use timestamp/status/amt from sheet)
-  const makeAdminTxRows=rows=>(rows||[]).map(rx=>({cartId:rx._txId||"",timestamp:rx._timestamp||"",authMsg:null,orderStatus:rx._status||"",amt:rx._amt||0,biller:rx._biller||""}));
+  const makeAdminTxRows=rows=>(rows||[]).map(rx=>({cartId:rx._txId||"",timestamp:rx._timestamp||"",authMsg:null,orderStatus:rx._status||"",amt:rx._amt||0,biller:rx._biller||"",payMethod:rx._payMethod||""}));
   const adminSuspectedWithTxRows=adminSuspected.map(r=>({...r,uniqueCCs:[r.userId||"—"],ccTxRows:{[r.userId||"—"]:makeAdminTxRows(r.rows)},email:r.email||"",custNames:r.custNames||[]}));
   const adminPayMethodsAdapted=adminPayMethods.map(r=>({...r,uniqueCCs:r.uniqueMethods||[],ccTxRows:Object.fromEntries((r.uniqueMethods||[]).map(m=>[m,makeAdminTxRows((r.rows||[]).filter(rx=>rx._payMethod===m))]))}));
   const adminHighAmtAdapted=adminHighAmt.map(r=>({...r,uniqueCCs:["—"],ccTxRows:{"—":makeAdminTxRows(r.rows)}}));
@@ -652,13 +731,14 @@ export default function App(){
       {id:"suspected",label:"🕵️ Suspected",rows:adminSuspectedWithTxRows,accent:"#7c3aed",cfg:{ccLabel:"User ID",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
       {id:"highamount",label:"💰 High Amounts",rows:adminHighAmtAdapted,accent:"#065f46",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
       {id:"fakedomain",label:"📧 Fake Domain",rows:adminFakeDomAdapted,accent:"#7c3aed",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
-      {id:"rechargeabuser",label:"📱 Recharge Abusers",rows:adminRechargeAdapted,accent:"#7c3aed",cfg:{ccLabel:"Recharge Number",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
+      {id:"rechargeabuser",label:"📱 Recharge Abusers",rows:adminRechargeAdapted,accent:"#7c3aed",cfg:{ccLabel:"Recharge Number",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true,showPayMethod:true}},
     ],
     onReimport:()=>{resetAdmin();setAdminModal(true);setAdminStep("drop");setAdminRows([]);setAdminErr("");},
     showRaw:adminShowRaw,setShowRaw:setAdminShowRaw,
     previewCols:["User Email","User Name","Payment Method","Service Biller","Status","Requested Amount","Transaction create time"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>{const wb=XLSX.utils.book_new();[["PayMethods",adminPayMethodsAdapted],["Suspected",adminSuspectedWithTxRows],["HighAmounts",adminHighAmtAdapted],["FakeDomain",adminFakeDomAdapted],["Recharge",adminRechargeAdapted]].forEach(([name,rows])=>{const data=rows.map(r=>({"Email":r.email||"—","Names":(r.custNames||[]).join(", ")||"—","CC/Method/ID":(r.uniqueCCs||[]).join(", ")||"—","Total":r.totalAmt||0,"Reason":(r.reasons||[]).join(" | ")}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`Admin_Fraud_${new Date().toISOString().split("T")[0]}.xlsx`);},
+    analysisPayload:adminSheetRaw.length>0?{platform:"Admin",recordCount:adminSheetRaw.length,fraud:adminPayMethods,highAmt:adminHighAmt,fakeDom:adminFakeDom,otherFlags:[...adminSuspected.map(r=>({email:r.email,risk:"HighSuspicious",txCount:r.txCount,reasons:r.reasons})),...adminRechargeAbusers.map(r=>({email:r.emails?.[0]||"",recharge:r.recharge,risk:r.risk,txCount:r.txCount,reasons:r.reasons}))]}:undefined,
   };
 
   // ── Fawry dashboard config ──
@@ -722,6 +802,7 @@ export default function App(){
     previewCols:["user","user email","Requested","Fawry Code","Status","Payment Method","Sold Date"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>{const wb=XLSX.utils.book_new();[["Suspected",fawrySuspected],["HighAmounts",fawryHighAmt],["FakeDomain",fawryFakeDom]].forEach(([name,rows])=>{const data=rows.map(r=>({"Email":r.email||"—","Names":(r.custNames||[]).join(", ")||"—","Tx Count":r.txCount,"Total (EGP)":r.totalAmt||0,"Reason":(r.reasons||[]).join(" | ")}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`Fawry_Fraud_${new Date().toISOString().split("T")[0]}.xlsx`);},
+    analysisPayload:fawryRaw.length>0?{platform:"Fawry",recordCount:fawryRaw.length,fraud:[],highAmt:fawryHighAmt,fakeDom:fawryFakeDom,otherFlags:fawrySuspected.map(r=>({email:r.email,risk:"HighSuspicious",txCount:r.txCount,reasons:r.reasons}))}:undefined,
   };
 
   // ── Empty state component ──
