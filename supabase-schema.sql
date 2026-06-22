@@ -130,6 +130,21 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created
 CREATE INDEX IF NOT EXISTS idx_customers_email
   ON customers(email);
 
+-- ── 6. BLOCKED_ENTITIES ─────────────────────────────────────────
+-- Globally blocked emails. Filtered out at render time across all platforms.
+CREATE TABLE IF NOT EXISTS blocked_entities (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  entity_value TEXT        UNIQUE NOT NULL,   -- lowercased email
+  entity_type  TEXT        NOT NULL DEFAULT 'email',
+  blocked_by   TEXT        NOT NULL,          -- username who blocked
+  platform     TEXT,                          -- platform where it was flagged
+  note         TEXT,                          -- optional reason
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_blocked_entities_value
+  ON blocked_entities(entity_value);
+
 -- ── SEED: initial app users ─────────────────────────────────────
 -- Passwords below are PLAINTEXT placeholders.
 -- Replace password_hash values with bcrypt hashes before going live,

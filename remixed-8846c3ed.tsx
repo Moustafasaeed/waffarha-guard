@@ -1,9 +1,10 @@
 // @ts-nocheck
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   logUploadSession, logFraudAlerts, logAuditEntry,
   buildCCAlerts, buildHighAmtAlerts, buildFakeDomAlerts,
   buildWalletAbuserAlerts, buildBNPLAlerts, buildAdminAlerts, buildFawryAlerts, buildPromoAlerts,
+  loadBlockedEmails, blockEmail, unblockEmail,
 } from "./lib/supabase";
 import { Shield, Upload, Search, X, CheckCircle, Eye, AlertTriangle, Users, CreditCard, DollarSign, ShieldAlert, Download } from "lucide-react";
 import Papa from "papaparse";
@@ -101,7 +102,7 @@ function makeExcelFile(fraud,highAmt,fakeDom,filename){
   const wb=XLSX.utils.book_new();sheets.forEach(({name,rows})=>{const ws=XLSX.utils.json_to_sheet(rows.length>0?rows:[Object.fromEntries(HEADERS.map(h=>[h,""]))],{header:HEADERS});ws["!cols"]=HEADERS.map(()=>({wch:22}));XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`${filename}_${new Date().toISOString().split("T")[0]}.xlsx`);}
 
 // ─── Universal Result Card ────────────────────────────────────────────────────
-function ResultCard({r,accentColor,cfg={},activeFilter,customRows,customHeader}){
+function ResultCard({r,accentColor,cfg={},activeFilter,customRows,customHeader,onBlock,isBlocked,blockingEmail}){
   const isHigh=r.risk==="High"||r.risk==="HighSuspicious"||r.risk==="HighAmount";
   const isMid=r.risk==="Mid";
   let badgeBg=activeFilter==="fakedomain"?"#581c87":activeFilter==="highamount"?"#065f46":isHigh?"#dc2626":isMid?"#d97706":"#065f46";
@@ -171,6 +172,13 @@ function ResultCard({r,accentColor,cfg={},activeFilter,customRows,customHeader})
             </div>
           ))}
         </div>
+        {/* Block button */}
+        {onBlock&&r.email&&<div style={{padding:"16px 14px",display:"flex",alignItems:"center",justifyContent:"center",borderLeft:"1px solid #f1f5f9"}}>
+          <button onClick={()=>onBlock(r.email)} disabled={!!blockingEmail} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"10px 14px",background:isBlocked&&isBlocked(r.email)?"#fef2f2":"#fff7ed",border:`1.5px solid ${isBlocked&&isBlocked(r.email)?"#fca5a5":"#fed7aa"}`,borderRadius:10,cursor:"pointer",opacity:blockingEmail===r.email?.toLowerCase()?.trim()?0.5:1,transition:"all 0.15s"}}>
+            <span style={{fontSize:16}}>{isBlocked&&isBlocked(r.email)?"🔒":"🚫"}</span>
+            <span style={{fontSize:10,fontWeight:700,color:isBlocked&&isBlocked(r.email)?"#dc2626":"#ea580c",whiteSpace:"nowrap"}}>{isBlocked&&isBlocked(r.email)?"Blocked":"Block"}</span>
+          </button>
+        </div>}
       </div>
 
       {/* Transactions table */}
@@ -296,7 +304,7 @@ function WalletAbuserCard({r,accent}){
 
 // ─── Universal Dashboard ──────────────────────────────────────────────────────
 function UniversalDashboard({config}){
-  const{accent,reimportLabel,raw,enriched,tabs,stats,onReimport,showRaw,setShowRaw,previewCols,previewKeyFn,onDownload}=config;
+  const{accent,reimportLabel,raw,enriched,tabs,stats,onReimport,showRaw,setShowRaw,previewCols,previewKeyFn,onDownload,onBlock,isBlocked,blockingEmail}=config;
   const [activeTab,setActiveTab]=useState(tabs[0].id);
   const [search,setSearch]=useState("");
 
@@ -348,7 +356,7 @@ function UniversalDashboard({config}){
     ):activeTabCfg.renderCard?(
       <div>{filteredRows.map((r,i)=>activeTabCfg.renderCard(r,i,activeAccent))}</div>
     ):(
-      <div>{filteredRows.map((r,i)=><ResultCard key={i} r={r} accentColor={activeAccent} cfg={activeTabCfg.cfg||{}} activeFilter={activeTab}/>)}</div>
+      <div>{filteredRows.map((r,i)=><ResultCard key={i} r={r} accentColor={activeAccent} cfg={activeTabCfg.cfg||{}} activeFilter={activeTab} onBlock={onBlock} isBlocked={isBlocked} blockingEmail={blockingEmail}/>)}</div>
     )}
 
     {/* Raw data */}
@@ -526,6 +534,7 @@ const PLATFORM_TABS=[
   {id:"fawry",label:"Fawry",clr:"#f97316",ready:true},
   {id:"promo",label:"Promo Abusers",clr:"#e11d48",ready:true},
   {id:"audit",label:"Audit Log",clr:"#10b981",ready:true,adminOnly:true},
+  {id:"settings",label:"⚙ Settings",clr:"#64748b",ready:true,adminOnly:true},
 ];
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
@@ -559,6 +568,12 @@ export default function App(){
   const [promoRaw,setPromoRaw]=useState([]);const [promoEnriched,setPromoEnriched]=useState([]);const [promoHighDiscount,setPromoHighDiscount]=useState([]);const [promoSameCard,setPromoSameCard]=useState([]);const [promoSameWallet,setPromoSameWallet]=useState([]);const [promoFakeDomain,setPromoFakeDomain]=useState([]);const [promoShowRaw,setPromoShowRaw]=useState(false);
   const [promoModal,setPromoModal]=useState(false);const [promoStep,setPromoStep]=useState("drop");const [promoRows,setPromoRows]=useState([]);const [promoLoading,setPromoLoading]=useState(false);const [promoErr,setPromoErr]=useState("");
 
+  // ── Blocked emails state ──
+  const [blockedEmails,setBlockedEmails]=useState(new Set());
+  const [blockedList,setBlockedList]=useState([]);
+  const [blockingEmail,setBlockingEmail]=useState(null);
+
+
   // ── Import handlers ──
   const doImportPT=async()=>{const en=ptRows.map(enrichPayTabsRow);const fraud=detectFraud(en,"CC Details"),high=detectHighAmounts(en),fake=detectFakeDomain(en);setPtRaw(ptRows);setPtEnriched(en);setPtFraud(fraud);setPtHighAmt(high);setPtFakeDom(fake);setPtShowRaw(false);setPtStep("done");const details=`High: ${fraud.filter(r=>r.risk==="High").length} · Mid: ${fraud.filter(r=>r.risk==="Mid").length} · High Amt: ${high.length} · Fake Domain: ${fake.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"PayTabs",records:ptRows.length,details});const sessionId=await logUploadSession({platform:"paytabs",uploaded_by:currentUser.username,record_count:ptRows.length,high_count:fraud.filter(r=>r.risk==="High").length,mid_count:fraud.filter(r=>r.risk==="Mid").length,high_amt_count:high.length,fake_dom_count:fake.length});if(sessionId){await logFraudAlerts(sessionId,[...buildCCAlerts(fraud,"paytabs"),...buildHighAmtAlerts(high,"paytabs"),...buildFakeDomAlerts(fake,"paytabs")]);}await logAuditEntry({username:currentUser.username,action:"Import",platform:"PayTabs",record_count:ptRows.length,details});};
   const doImportPM=async()=>{const wEn=pmRows.map(enrichPaymobRow);const bRows=filterBNPLRows(pmRows);const bEn=bRows.map(enrichBNPLRow);const wFraud=detectFraud(wEn,"wallets"),wHigh=detectHighAmounts(wEn),wFake=detectFakeDomain(wEn),wAbusers=detectWalletAbusers(wEn);const bFraud=detectBNPLFraud(bEn),bHigh=detectHighAmounts(bEn);setPmRaw(pmRows);setPmWEnriched(wEn);setPmWFraud(wFraud);setPmWHighAmt(wHigh);setPmWFakeDom(wFake);setPmWalletAbusers(wAbusers);setPmBEnriched(bEn);setPmBFraud(bFraud);setPmBHighAmt(bHigh);setPmWShowRaw(false);setPmBShowRaw(false);setPmSubTab("wallets");setPmStep("done");const details=`W High: ${wFraud.filter(r=>r.risk==="High").length} Mid: ${wFraud.filter(r=>r.risk==="Mid").length} Abusers: ${wAbusers.length} | BNPL: Susp: ${bFraud.length} HighAmt: ${bHigh.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"PayMob",records:pmRows.length,details});const wSessionId=await logUploadSession({platform:"paymob_wallets",uploaded_by:currentUser.username,record_count:pmRows.length,high_count:wFraud.filter(r=>r.risk==="High").length,mid_count:wFraud.filter(r=>r.risk==="Mid").length,high_amt_count:wHigh.length,fake_dom_count:wFake.length,other_count:wAbusers.length});if(wSessionId){await logFraudAlerts(wSessionId,[...buildCCAlerts(wFraud,"paymob_wallets"),...buildHighAmtAlerts(wHigh,"paymob_wallets"),...buildFakeDomAlerts(wFake,"paymob_wallets"),...buildWalletAbuserAlerts(wAbusers,"paymob_wallets")]);}const bSessionId=await logUploadSession({platform:"paymob_bnpl",uploaded_by:currentUser.username,record_count:bEn.length,high_count:bFraud.length,mid_count:0,high_amt_count:bHigh.length,fake_dom_count:0});if(bSessionId){await logFraudAlerts(bSessionId,[...buildBNPLAlerts(bFraud,"paymob_bnpl"),...buildHighAmtAlerts(bHigh,"paymob_bnpl")]);}await logAuditEntry({username:currentUser.username,action:"Import",platform:"PayMob",record_count:pmRows.length,details});};
@@ -582,22 +597,37 @@ export default function App(){
 
   if(!currentUser)return <LoginScreen onLogin={setCurrentUser}/>;
 
+  // ── Load / refresh blocked emails from Supabase ──
+  const refreshBlocked=async()=>{const rows=await loadBlockedEmails();setBlockedList(rows);setBlockedEmails(new Set(rows.map(r=>r.entity_value)));};
+  useEffect(()=>{if(currentUser)refreshBlocked();},[currentUser?.username]);
+
+  const isBlocked=(email)=>!!email&&blockedEmails.has(email.toLowerCase().trim());
+
+  const handleBlock=async(email,platform)=>{if(!email)return;const key=email.toLowerCase().trim();setBlockingEmail(key);await blockEmail(key,currentUser.username,platform);await refreshBlocked();setBlockingEmail(null);};
+  const handleUnblock=async(email)=>{await unblockEmail(email);await refreshBlocked();};
+
+  // ── Shared block props passed into every dashboard config ──
+  const blockProps={onBlock:handleBlock,isBlocked,blockingEmail};
+  const unblocked=(arr)=>(arr||[]).filter(r=>!isBlocked(r.email));
+  const unblockedGroup=(arr)=>(arr||[]).map(r=>({...r,emails:(r.emails||[]).filter(e=>!isBlocked(e))})).filter(r=>(r.emails||[]).length>=2);
+
   // ── PayTabs dashboard config ──
   const ptConfig={
     accent:"#7c3aed",reimportLabel:"PayTabs",raw:ptRaw,enriched:ptEnriched,
     stats:[{label:"Total Records",value:ptRaw.length,clr:"#7c3aed",Icon:CreditCard},{label:"High Risk",value:ptFraud.filter(r=>r.risk==="High").length,clr:"#dc2626",Icon:AlertTriangle},{label:"Mid Risk",value:ptFraud.filter(r=>r.risk==="Mid").length,clr:"#d97706",Icon:Users},{label:"High Amounts",value:ptHighAmt.length,clr:"#065f46",Icon:DollarSign},{label:"Fake Domain",value:ptFakeDom.length,clr:"#7c3aed",Icon:ShieldAlert}],
     tabs:[
-      {id:"all",label:"All",rows:ptFraud,accent:"#334155",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
-      {id:"high",label:"🔴 High",rows:ptFraud.filter(r=>r.risk==="High"),accent:"#dc2626",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
-      {id:"mid",label:"🟡 Mid",rows:ptFraud.filter(r=>r.risk==="Mid"),accent:"#d97706",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
-      {id:"highamount",label:"💰 High Amounts",rows:ptHighAmt,accent:"#065f46",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
-      {id:"fakedomain",label:"📧 Fake Domain",rows:ptFakeDom,accent:"#7c3aed",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
+      {id:"all",label:"All",rows:unblocked(ptFraud),accent:"#334155",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
+      {id:"high",label:"🔴 High",rows:unblocked(ptFraud.filter(r=>r.risk==="High")),accent:"#dc2626",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
+      {id:"mid",label:"🟡 Mid",rows:unblocked(ptFraud.filter(r=>r.risk==="Mid")),accent:"#d97706",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
+      {id:"highamount",label:"💰 High Amounts",rows:unblocked(ptHighAmt),accent:"#065f46",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
+      {id:"fakedomain",label:"📧 Fake Domain",rows:unblocked(ptFakeDom),accent:"#7c3aed",cfg:{ccLabel:"CC Details",cartLabel:"Cart ID",showOS:false,showECI:true,showCountries:true,hideStatus:true}},
     ],
     onReimport:()=>{setPtModal(true);setPtStep("drop");setPtRows([]);setPtErr("");},
     showRaw:ptShowRaw,setShowRaw:setPtShowRaw,
     previewCols:["Customer Email","Customer Name","Payment Description","Expiry Year","Expiry Month","Issuer Country","Cart ID"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(ptFraud,ptHighAmt,ptFakeDom,"PayTabs"),
+    ...blockProps,
   };
 
   // ── Noon dashboard config ──
@@ -605,17 +635,18 @@ export default function App(){
     accent:"#f59e0b",reimportLabel:"Noon",raw:noonMerged,enriched:noonEnriched,
     stats:[{label:"Total Records",value:noonMerged.length,clr:"#f59e0b",Icon:CreditCard},{label:"High Risk",value:noonFraud.filter(r=>r.risk==="High").length,clr:"#dc2626",Icon:AlertTriangle},{label:"Mid Risk",value:noonFraud.filter(r=>r.risk==="Mid").length,clr:"#d97706",Icon:Users},{label:"High Amounts",value:noonHighAmt.length,clr:"#065f46",Icon:DollarSign},{label:"Fake Domain",value:noonFakeDom.length,clr:"#7c3aed",Icon:ShieldAlert}],
     tabs:[
-      {id:"all",label:"All",rows:noonFraud,accent:"#334155",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
-      {id:"high",label:"🔴 High",rows:noonFraud.filter(r=>r.risk==="High"),accent:"#dc2626",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
-      {id:"mid",label:"🟡 Mid",rows:noonFraud.filter(r=>r.risk==="Mid"),accent:"#d97706",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
-      {id:"highamount",label:"💰 High Amounts",rows:noonHighAmt,accent:"#065f46",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
-      {id:"fakedomain",label:"📧 Fake Domain",rows:noonFakeDom,accent:"#7c3aed",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
+      {id:"all",label:"All",rows:unblocked(noonFraud),accent:"#334155",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
+      {id:"high",label:"🔴 High",rows:unblocked(noonFraud.filter(r=>r.risk==="High")),accent:"#dc2626",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
+      {id:"mid",label:"🟡 Mid",rows:unblocked(noonFraud.filter(r=>r.risk==="Mid")),accent:"#d97706",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
+      {id:"highamount",label:"💰 High Amounts",rows:unblocked(noonHighAmt),accent:"#065f46",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
+      {id:"fakedomain",label:"📧 Fake Domain",rows:unblocked(noonFakeDom),accent:"#7c3aed",cfg:{ccLabel:"CC Details",cartLabel:"Merchant Order Ref",showOS:true,showECI:true,showCountries:true}},
     ],
     onReimport:resetNoon,
     showRaw:noonShowRaw,setShowRaw:setNoonShowRaw,
     previewCols:["User Email","User Name","Payerinfo","Merchantorderreference","Orderdate_UTC","Issuercountry","Responsemessage","Orderstatus"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(noonFraud,noonHighAmt,noonFakeDom,"Noon"),
+    ...blockProps,
   };
 
   // ── PayMob wallets dashboard config ──
@@ -623,18 +654,19 @@ export default function App(){
     accent:"#2563eb",reimportLabel:"PayMob Wallets",raw:pmRaw,enriched:pmWEnriched,
     stats:[{label:"Wallet Records",value:pmRaw.length,clr:"#2563eb",Icon:CreditCard},{label:"High Risk",value:pmWFraud.filter(r=>r.risk==="High").length,clr:"#dc2626",Icon:AlertTriangle},{label:"Mid Risk",value:pmWFraud.filter(r=>r.risk==="Mid").length,clr:"#d97706",Icon:Users},{label:"High Amounts",value:pmWHighAmt.length,clr:"#065f46",Icon:DollarSign},{label:"Fake Domain",value:pmWFakeDom.length,clr:"#7c3aed",Icon:ShieldAlert},{label:"Wallet Abusers",value:pmWalletAbusers.length,clr:"#7c3aed",Icon:ShieldAlert}],
     tabs:[
-      {id:"all",label:"All",rows:pmWFraud,accent:"#334155",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
-      {id:"high",label:"🔴 High",rows:pmWFraud.filter(r=>r.risk==="High"),accent:"#dc2626",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
-      {id:"mid",label:"🟡 Mid",rows:pmWFraud.filter(r=>r.risk==="Mid"),accent:"#d97706",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
-      {id:"highamount",label:"💰 High Amounts",rows:pmWHighAmt,accent:"#065f46",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
-      {id:"fakedomain",label:"📧 Fake Domain",rows:pmWFakeDom,accent:"#7c3aed",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
-      {id:"walletabuser",label:"👛 Wallet Abusers",rows:pmWalletAbusers,accent:"#7c3aed",renderCard:(r,i,ac)=><WalletAbuserCard key={i} r={r} accent={ac}/>},
+      {id:"all",label:"All",rows:unblocked(pmWFraud),accent:"#334155",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
+      {id:"high",label:"🔴 High",rows:unblocked(pmWFraud.filter(r=>r.risk==="High")),accent:"#dc2626",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
+      {id:"mid",label:"🟡 Mid",rows:unblocked(pmWFraud.filter(r=>r.risk==="Mid")),accent:"#d97706",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
+      {id:"highamount",label:"💰 High Amounts",rows:unblocked(pmWHighAmt),accent:"#065f46",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
+      {id:"fakedomain",label:"📧 Fake Domain",rows:unblocked(pmWFakeDom),accent:"#7c3aed",cfg:{ccLabel:"Wallets",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
+      {id:"walletabuser",label:"👛 Wallet Abusers",rows:unblockedGroup(pmWalletAbusers),accent:"#7c3aed",renderCard:(r,i,ac)=><WalletAbuserCard key={i} r={r} accent={ac}/>},
     ],
     onReimport:()=>{setPmModal(true);setPmStep("drop");setPmRows([]);setPmErr("");},
     showRaw:pmWShowRaw,setShowRaw:setPmWShowRaw,
     previewCols:["client_email","client_name","client_phone","merchant_order_id","created_at","data_message_execl","success","amount_whole"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(pmWFraud,pmWHighAmt,pmWFakeDom,"PayMob_Wallets"),
+    ...blockProps,
   };
 
   // ── PayMob BNPL config ──
@@ -642,14 +674,15 @@ export default function App(){
     accent:"#7c3aed",reimportLabel:"PayMob BNPL",raw:pmBEnriched,enriched:pmBEnriched,
     stats:[{label:"BNPL Records",value:pmBEnriched.length,clr:"#7c3aed",Icon:CreditCard},{label:"High Suspicious",value:pmBFraud.length,clr:"#dc2626",Icon:AlertTriangle},{label:"High Amounts",value:pmBHighAmt.length,clr:"#065f46",Icon:DollarSign}],
     tabs:[
-      {id:"all",label:"🔴 Suspicious",rows:pmBFraud,accent:"#dc2626",cfg:{ccLabel:"BNPL",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
-      {id:"highamount",label:"💰 High Amounts",rows:pmBHighAmt,accent:"#065f46",cfg:{ccLabel:"BNPL",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
+      {id:"all",label:"🔴 Suspicious",rows:unblocked(pmBFraud),accent:"#dc2626",cfg:{ccLabel:"BNPL",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
+      {id:"highamount",label:"💰 High Amounts",rows:unblocked(pmBHighAmt),accent:"#065f46",cfg:{ccLabel:"BNPL",cartLabel:"Merchant Order ID",showOS:true,showECI:false,showCountries:false}},
     ],
     onReimport:()=>{setPmModal(true);setPmStep("drop");setPmRows([]);setPmErr("");},
     showRaw:pmBShowRaw,setShowRaw:setPmBShowRaw,
     previewCols:["client_email","client_name","payment_method","merchant_order_id","created_at","success","amount_whole"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(pmBFraud,pmBHighAmt,[],"PayMob_BNPL"),
+    ...blockProps,
   };
 
   // ── Admin dashboard config ──
@@ -665,10 +698,10 @@ export default function App(){
     accent:"#0ea5e9",reimportLabel:"Admin",raw:adminSheetRaw,enriched:adminEnriched,
     stats:[{label:"Total Records",value:adminSheetRaw.length,clr:"#0ea5e9",Icon:CreditCard},{label:"Pay Method Abuse",value:adminPayMethods.length,clr:"#dc2626",Icon:AlertTriangle},{label:"Suspected",value:adminSuspected.length,clr:"#7c3aed",Icon:Users},{label:"High Amounts",value:adminHighAmt.length,clr:"#065f46",Icon:DollarSign},{label:"Fake Domain",value:adminFakeDom.length,clr:"#581c87",Icon:ShieldAlert},{label:"Recharge Abusers",value:adminRechargeAbusers.length,clr:"#7c3aed",Icon:ShieldAlert}],
     tabs:[
-      {id:"paymethods",label:"💳 Pay Method Abuse",rows:adminPayMethodsAdapted,accent:"#dc2626",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
-      {id:"suspected",label:"🕵️ Suspected",rows:adminSuspectedWithTxRows,accent:"#7c3aed",cfg:{ccLabel:"User ID",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true,showPayMethod:true}},
-      {id:"highamount",label:"💰 High Amounts",rows:adminHighAmtAdapted,accent:"#065f46",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
-      {id:"fakedomain",label:"📧 Fake Domain",rows:adminFakeDomAdapted,accent:"#7c3aed",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
+      {id:"paymethods",label:"💳 Pay Method Abuse",rows:unblocked(adminPayMethodsAdapted),accent:"#dc2626",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
+      {id:"suspected",label:"🕵️ Suspected",rows:unblocked(adminSuspectedWithTxRows),accent:"#7c3aed",cfg:{ccLabel:"User ID",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true,showPayMethod:true}},
+      {id:"highamount",label:"💰 High Amounts",rows:unblocked(adminHighAmtAdapted),accent:"#065f46",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
+      {id:"fakedomain",label:"📧 Fake Domain",rows:unblocked(adminFakeDomAdapted),accent:"#7c3aed",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
       {id:"rechargeabuser",label:"📱 Recharge Abusers",rows:adminRechargeAdapted,accent:"#7c3aed",cfg:{ccLabel:"Recharge Number",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true,showPayMethod:true}},
     ],
     onReimport:()=>{resetAdmin();setAdminModal(true);setAdminStep("drop");setAdminRows([]);setAdminErr("");},
@@ -676,6 +709,7 @@ export default function App(){
     previewCols:["User Email","User Name","Payment Method","Service Biller","Status","Requested Amount","Transaction create time"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>{const wb=XLSX.utils.book_new();[["PayMethods",adminPayMethodsAdapted],["Suspected",adminSuspectedWithTxRows],["HighAmounts",adminHighAmtAdapted],["FakeDomain",adminFakeDomAdapted],["Recharge",adminRechargeAdapted]].forEach(([name,rows])=>{const data=rows.map(r=>({"Email":r.email||"—","Names":(r.custNames||[]).join(", ")||"—","CC/Method/ID":(r.uniqueCCs||[]).join(", ")||"—","Total":r.totalAmt||0,"Reason":(r.reasons||[]).join(" | ")}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`Admin_Fraud_${new Date().toISOString().split("T")[0]}.xlsx`);},
+    ...blockProps,
   };
 
   // ── Fawry dashboard config ──
@@ -727,22 +761,23 @@ export default function App(){
   );
 
   // ── Promo Cards ──
-  const PromoCard=({r,accent,badgeLabel})=>{const badgeBg=badgeLabel==="FAKE DOMAIN"?"#581c87":"#dc2626";const bLines=badgeLabel.split(" ");return(<div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 12px rgba(0,0,0,0.07)",border:`1px solid ${accent}22`,marginBottom:16,overflow:"hidden"}}><div style={{display:"flex",alignItems:"stretch"}}><div style={{background:badgeBg,width:80,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px 8px",gap:2}}>{bLines.map((t,i)=><div key={i} style={{color:"#fff",fontWeight:900,fontSize:10,letterSpacing:1,textAlign:"center"}}>{t}</div>)}<div style={{color:"rgba(255,255,255,0.6)",fontSize:10,marginTop:6,fontWeight:600}}>{r.txCount} orders</div></div><div style={{flex:1,padding:"16px 20px",display:"flex",flexDirection:"column",justifyContent:"center",borderRight:"1px solid #f1f5f9"}}><div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:5}}>{(r.custNames||[]).map((n,i)=><span key={i} style={{fontWeight:800,fontSize:15,color:"#0f172a"}}>{n}</span>)}</div><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><span style={{fontSize:13,color:"#334155",wordBreak:"break-all"}}>{r.email}</span>{r.email&&isDisposable(r.email)&&<span style={{background:"#fee2e2",color:"#b91c1c",padding:"2px 7px",borderRadius:4,fontSize:11,fontWeight:700}}>⚠ Non-wl</span>}</div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(r.promoCodes||[]).map((code,i)=><div key={i} style={{background:"#1e293b",color:"#fbbf24",borderRadius:6,padding:"5px 11px",fontSize:12,fontFamily:"'Courier New',monospace",fontWeight:700,display:"inline-flex",alignItems:"center",gap:6}}><span style={{fontSize:11}}>🏷</span>{code}</div>)}</div></div><div style={{background:"#f8fafc",padding:"16px 24px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minWidth:130,borderRight:"1px solid #f1f5f9"}}><div style={{fontSize:10,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Discount (EGP)</div><div style={{fontWeight:900,color:accent,fontSize:24,lineHeight:1}}>{(r.totalDiscount||0).toLocaleString()}</div></div><div style={{padding:"16px 20px",display:"flex",flexDirection:"column",justifyContent:"center",minWidth:220,maxWidth:280}}><div style={{fontSize:10,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Reason</div>{(r.reasons||[]).map((rs,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:4}}><span style={{color:accent,fontWeight:900,fontSize:14}}>›</span><span style={{fontSize:12,color:"#475569",lineHeight:1.5}}>{rs}</span></div>)}</div></div>{(r.txRows||[]).length>0&&(<div style={{borderTop:"1px solid #f1f5f9",overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr style={{background:"#f8fafc"}}>{["Order ID","Promo Code","Trx Flag","Discount (EGP)","Status","Total (EGP)","Date"].map(h=><th key={h} style={{padding:"8px 14px",textAlign:"left",fontWeight:700,color:"#64748b",fontSize:10,textTransform:"uppercase",letterSpacing:0.6,whiteSpace:"nowrap",borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}</tr></thead><tbody>{(r.txRows||[]).map((tx,ti)=>{const sl=(tx.orderStatus||"").toLowerCase();const clr=sl==="paid"||sl==="completed"?"#16a34a":sl==="refunded"?"#d97706":"#64748b";return(<tr key={ti} style={{borderBottom:ti<(r.txRows||[]).length-1?"1px solid #f8fafc":"none",background:ti%2===0?"#fff":"#fafafa"}}><td style={{padding:"9px 14px",whiteSpace:"nowrap"}}>{tx.orderId?<span style={{background:"#eff6ff",color:"#2563eb",border:"1px solid #bfdbfe",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:600}}>{tx.orderId}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td><td style={{padding:"9px 14px",whiteSpace:"nowrap"}}><span style={{background:"#1e293b",color:"#fbbf24",padding:"2px 9px",borderRadius:5,fontSize:11,fontFamily:"monospace",fontWeight:700}}>{tx.promoCode||"—"}</span></td><td style={{padding:"9px 14px",whiteSpace:"nowrap"}}>{tx.trxFlag?<span style={{fontWeight:700,fontSize:12,color:tx.trxFlag.toLowerCase()==="fraud"?"#dc2626":tx.trxFlag.toLowerCase()==="abuser"?"#d97706":"#64748b"}}>{tx.trxFlag}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td><td style={{padding:"9px 14px",textAlign:"right",fontWeight:700,color:accent}}>{tx.discountAmt>0?tx.discountAmt.toLocaleString():"—"}</td><td style={{padding:"9px 14px",whiteSpace:"nowrap"}}><span style={{fontWeight:700,color:clr,fontSize:12}}>{tx.orderStatus||"—"}</span></td><td style={{padding:"9px 14px",textAlign:"right",fontWeight:700}}>{tx.total>0?<span style={{background:"#f0fdf4",color:"#16a34a",padding:"2px 8px",borderRadius:5,fontSize:12}}>{tx.total.toLocaleString()}</span>:"—"}</td><td style={{padding:"9px 14px",fontSize:11,fontFamily:"monospace",color:"#475569",whiteSpace:"nowrap"}}>{tx.createdAt||"—"}</td></tr>);})}</tbody></table></div>)}</div>);};
+  const PromoCard=({r,accent,badgeLabel,onBlock,isBlocked,blockingEmail})=>{const badgeBg=badgeLabel==="FAKE DOMAIN"?"#581c87":"#dc2626";const bLines=badgeLabel.split(" ");return(<div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 12px rgba(0,0,0,0.07)",border:`1px solid ${accent}22`,marginBottom:16,overflow:"hidden"}}><div style={{display:"flex",alignItems:"stretch"}}><div style={{background:badgeBg,width:80,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px 8px",gap:2}}>{bLines.map((t,i)=><div key={i} style={{color:"#fff",fontWeight:900,fontSize:10,letterSpacing:1,textAlign:"center"}}>{t}</div>)}<div style={{color:"rgba(255,255,255,0.6)",fontSize:10,marginTop:6,fontWeight:600}}>{r.txCount} orders</div></div><div style={{flex:1,padding:"16px 20px",display:"flex",flexDirection:"column",justifyContent:"center",borderRight:"1px solid #f1f5f9"}}><div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:5}}>{(r.custNames||[]).map((n,i)=><span key={i} style={{fontWeight:800,fontSize:15,color:"#0f172a"}}>{n}</span>)}</div><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><span style={{fontSize:13,color:"#334155",wordBreak:"break-all"}}>{r.email}</span>{r.email&&isDisposable(r.email)&&<span style={{background:"#fee2e2",color:"#b91c1c",padding:"2px 7px",borderRadius:4,fontSize:11,fontWeight:700}}>⚠ Non-wl</span>}</div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(r.promoCodes||[]).map((code,i)=><div key={i} style={{background:"#1e293b",color:"#fbbf24",borderRadius:6,padding:"5px 11px",fontSize:12,fontFamily:"'Courier New',monospace",fontWeight:700,display:"inline-flex",alignItems:"center",gap:6}}><span style={{fontSize:11}}>🏷</span>{code}</div>)}</div></div><div style={{background:"#f8fafc",padding:"16px 24px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minWidth:130,borderRight:"1px solid #f1f5f9"}}><div style={{fontSize:10,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Discount (EGP)</div><div style={{fontWeight:900,color:accent,fontSize:24,lineHeight:1}}>{(r.totalDiscount||0).toLocaleString()}</div></div><div style={{padding:"16px 20px",display:"flex",flexDirection:"column",justifyContent:"center",minWidth:220,maxWidth:280}}><div style={{fontSize:10,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Reason</div>{(r.reasons||[]).map((rs,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:4}}><span style={{color:accent,fontWeight:900,fontSize:14}}>›</span><span style={{fontSize:12,color:"#475569",lineHeight:1.5}}>{rs}</span></div>)}</div>{onBlock&&r.email&&<div style={{padding:"16px 14px",display:"flex",alignItems:"center",justifyContent:"center",borderLeft:"1px solid #f1f5f9"}}><button onClick={()=>onBlock(r.email,"promo")} disabled={!!blockingEmail} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"10px 14px",background:isBlocked&&isBlocked(r.email)?"#fef2f2":"#fff7ed",border:`1.5px solid ${isBlocked&&isBlocked(r.email)?"#fca5a5":"#fed7aa"}`,borderRadius:10,cursor:"pointer",opacity:blockingEmail===r.email?.toLowerCase()?.trim()?0.5:1}}><span style={{fontSize:16}}>{isBlocked&&isBlocked(r.email)?"🔒":"🚫"}</span><span style={{fontSize:10,fontWeight:700,color:isBlocked&&isBlocked(r.email)?"#dc2626":"#ea580c",whiteSpace:"nowrap"}}>{isBlocked&&isBlocked(r.email)?"Blocked":"Block"}</span></button></div>}</div>{(r.txRows||[]).length>0&&(<div style={{borderTop:"1px solid #f1f5f9",overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr style={{background:"#f8fafc"}}>{["Order ID","Promo Code","Trx Flag","Discount (EGP)","Status","Total (EGP)","Date"].map(h=><th key={h} style={{padding:"8px 14px",textAlign:"left",fontWeight:700,color:"#64748b",fontSize:10,textTransform:"uppercase",letterSpacing:0.6,whiteSpace:"nowrap",borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}</tr></thead><tbody>{(r.txRows||[]).map((tx,ti)=>{const sl=(tx.orderStatus||"").toLowerCase();const clr=sl==="paid"||sl==="completed"?"#16a34a":sl==="refunded"?"#d97706":"#64748b";return(<tr key={ti} style={{borderBottom:ti<(r.txRows||[]).length-1?"1px solid #f8fafc":"none",background:ti%2===0?"#fff":"#fafafa"}}><td style={{padding:"9px 14px",whiteSpace:"nowrap"}}>{tx.orderId?<span style={{background:"#eff6ff",color:"#2563eb",border:"1px solid #bfdbfe",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:600}}>{tx.orderId}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td><td style={{padding:"9px 14px",whiteSpace:"nowrap"}}><span style={{background:"#1e293b",color:"#fbbf24",padding:"2px 9px",borderRadius:5,fontSize:11,fontFamily:"monospace",fontWeight:700}}>{tx.promoCode||"—"}</span></td><td style={{padding:"9px 14px",whiteSpace:"nowrap"}}>{tx.trxFlag?<span style={{fontWeight:700,fontSize:12,color:tx.trxFlag.toLowerCase()==="fraud"?"#dc2626":tx.trxFlag.toLowerCase()==="abuser"?"#d97706":"#64748b"}}>{tx.trxFlag}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td><td style={{padding:"9px 14px",textAlign:"right",fontWeight:700,color:accent}}>{tx.discountAmt>0?tx.discountAmt.toLocaleString():"—"}</td><td style={{padding:"9px 14px",whiteSpace:"nowrap"}}><span style={{fontWeight:700,color:clr,fontSize:12}}>{tx.orderStatus||"—"}</span></td><td style={{padding:"9px 14px",textAlign:"right",fontWeight:700}}>{tx.total>0?<span style={{background:"#f0fdf4",color:"#16a34a",padding:"2px 8px",borderRadius:5,fontSize:12}}>{tx.total.toLocaleString()}</span>:"—"}</td><td style={{padding:"9px 14px",fontSize:11,fontFamily:"monospace",color:"#475569",whiteSpace:"nowrap"}}>{tx.createdAt||"—"}</td></tr>);})}</tbody></table></div>)}</div>);};
   const PromoAbuserCard=({r,accent,identLabel})=>{const isH=r.risk==="High";const identifier=r.card||r.wallet;return(<div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 12px rgba(0,0,0,0.07)",border:`1px solid ${accent}22`,marginBottom:16,overflow:"hidden"}}><div style={{display:"flex",alignItems:"stretch"}}><div style={{background:isH?"#dc2626":"#d97706",width:80,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px 8px",gap:2}}><div style={{color:"#fff",fontWeight:900,fontSize:11,letterSpacing:1}}>{r.risk.toUpperCase()}</div><div style={{color:"rgba(255,255,255,0.6)",fontSize:10,marginTop:6,fontWeight:600}}>{r.txCount} tx</div></div><div style={{flex:1,padding:"16px 20px",borderRight:"1px solid #f1f5f9"}}><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{background:"#1e293b",color:"#a5b4fc",borderRadius:7,padding:"6px 14px",fontSize:13,fontFamily:"monospace",fontWeight:700}}>{identifier}</div><span style={{background:"#fef3c7",color:"#92400e",padding:"3px 10px",borderRadius:6,fontSize:11,fontWeight:700}}>{identLabel} · 👥 {r.emails.length} accounts</span></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{r.emails.map((email,ei)=><span key={ei} style={{fontSize:12,color:"#334155",background:"#f8fafc",borderRadius:5,padding:"3px 9px",border:"1px solid #e2e8f0"}}>{email}{isDisposable(email)&&<span style={{marginLeft:5,background:"#fee2e2",color:"#b91c1c",padding:"1px 5px",borderRadius:3,fontSize:10,fontWeight:600}}>⚠</span>}</span>)}</div></div><div style={{background:"#f8fafc",padding:"16px 24px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minWidth:130,borderRight:"1px solid #f1f5f9"}}><div style={{fontSize:10,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Discount (EGP)</div><div style={{fontWeight:900,color:accent,fontSize:24,lineHeight:1}}>{r.totalDiscount.toLocaleString()}</div></div><div style={{padding:"16px 20px",display:"flex",flexDirection:"column",justifyContent:"center",minWidth:220}}><div style={{fontSize:10,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Reason</div>{r.reasons.map((rs,ri)=><div key={ri} style={{display:"flex",gap:6,marginBottom:4}}><span style={{color:accent,fontWeight:900,fontSize:14}}>›</span><span style={{fontSize:12,color:"#475569",lineHeight:1.5}}>{rs}</span></div>)}</div></div>{r.emails.map((email,ei)=>{const d=r.emailDetails[email]||{};return(<div key={ei} style={{borderTop:"1px solid #f1f5f9"}}><div style={{padding:"8px 16px",background:"#f8fafc",display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:11,fontWeight:700,color:"#475569"}}>📧</span><span style={{fontSize:12,color:"#334155",fontWeight:600}}>{email}</span><span style={{fontSize:11,color:"#94a3b8"}}>· {(d.txRows||[]).length} orders · Discount EGP {(d.discount||0).toLocaleString()}</span></div>{(d.txRows||[]).length>0&&(<table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr style={{background:"#fff"}}>{["Order ID","Promo Code","Trx Flag","Discount (EGP)","Status","Date"].map(h=><th key={h} style={{padding:"6px 14px",textAlign:"left",fontWeight:700,color:"#94a3b8",fontSize:10,textTransform:"uppercase",letterSpacing:0.5,borderBottom:"1px solid #f1f5f9",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead><tbody>{(d.txRows||[]).map((tx,ti)=>{const sl=(tx.orderStatus||"").toLowerCase();const clr=sl==="paid"||sl==="completed"?"#16a34a":sl==="refunded"?"#d97706":"#64748b";return(<tr key={ti} style={{borderBottom:ti<(d.txRows||[]).length-1?"1px solid #f8fafc":"none",background:ti%2===0?"#fff":"#fafafa"}}><td style={{padding:"8px 14px",whiteSpace:"nowrap"}}>{tx.orderId?<span style={{background:"#eff6ff",color:"#2563eb",border:"1px solid #bfdbfe",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:600}}>{tx.orderId}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td><td style={{padding:"8px 14px",whiteSpace:"nowrap"}}><span style={{background:"#1e293b",color:"#fbbf24",padding:"2px 9px",borderRadius:5,fontSize:11,fontFamily:"monospace",fontWeight:700}}>{tx.promoCode||"—"}</span></td><td style={{padding:"8px 14px",whiteSpace:"nowrap"}}>{tx.trxFlag?<span style={{fontWeight:700,fontSize:12,color:tx.trxFlag.toLowerCase()==="fraud"?"#dc2626":tx.trxFlag.toLowerCase()==="abuser"?"#d97706":"#64748b"}}>{tx.trxFlag}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td><td style={{padding:"8px 14px",textAlign:"right",fontWeight:700,color:accent}}>{tx.discountAmt>0?tx.discountAmt.toLocaleString():"—"}</td><td style={{padding:"8px 14px",whiteSpace:"nowrap"}}><span style={{fontWeight:700,color:clr,fontSize:12}}>{tx.orderStatus||"—"}</span></td><td style={{padding:"8px 14px",fontSize:11,fontFamily:"monospace",color:"#475569",whiteSpace:"nowrap"}}>{tx.createdAt||"—"}</td></tr>);})}</tbody></table>)}</div>);})}</div>);};
 
   const fawryConfig={
     accent:"#f97316",reimportLabel:"Fawry",raw:fawryRaw,enriched:fawryEnriched,
     stats:[{label:"Total Records",value:fawryRaw.length,clr:"#f97316",Icon:CreditCard},{label:"Suspected",value:fawrySuspected.length,clr:"#dc2626",Icon:AlertTriangle},{label:"High Amounts",value:fawryHighAmt.length,clr:"#065f46",Icon:DollarSign},{label:"Fake Domain",value:fawryFakeDom.length,clr:"#7c3aed",Icon:ShieldAlert}],
     tabs:[
-      {id:"suspected",label:"🔴 Suspected",rows:fawrySuspected,accent:"#dc2626",renderCard:(r,i,ac)=><FawryCard key={i} r={r} accentColor={ac}/>},
-      {id:"highamount",label:"💰 High Amounts",rows:fawryHighAmt,accent:"#065f46",renderCard:(r,i,ac)=><FawryCard key={i} r={{...r,reasons:r.reasons}} accentColor={ac}/>},
-      {id:"fakedomain",label:"📧 Fake Domain",rows:fawryFakeDom,accent:"#7c3aed",renderCard:(r,i,ac)=><FawryCard key={i} r={r} accentColor={ac}/>},
+      {id:"suspected",label:"🔴 Suspected",rows:unblocked(fawrySuspected),accent:"#dc2626",renderCard:(r,i,ac)=><FawryCard key={i} r={r} accentColor={ac}/>},
+      {id:"highamount",label:"💰 High Amounts",rows:unblocked(fawryHighAmt),accent:"#065f46",renderCard:(r,i,ac)=><FawryCard key={i} r={{...r,reasons:r.reasons}} accentColor={ac}/>},
+      {id:"fakedomain",label:"📧 Fake Domain",rows:unblocked(fawryFakeDom),accent:"#7c3aed",renderCard:(r,i,ac)=><FawryCard key={i} r={r} accentColor={ac}/>},
     ],
     onReimport:()=>{resetFawry();setFawryModal(true);setFawryStep("drop");setFawryRows([]);setFawryErr("");},
     showRaw:fawryShowRaw,setShowRaw:setFawryShowRaw,
     previewCols:["user","user email","Requested","Fawry Code","Status","Payment Method","Sold Date"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>{const wb=XLSX.utils.book_new();[["Suspected",fawrySuspected],["HighAmounts",fawryHighAmt],["FakeDomain",fawryFakeDom]].forEach(([name,rows])=>{const data=rows.map(r=>({"Email":r.email||"—","Names":(r.custNames||[]).join(", ")||"—","Tx Count":r.txCount,"Total (EGP)":r.totalAmt||0,"Reason":(r.reasons||[]).join(" | ")}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`Fawry_Fraud_${new Date().toISOString().split("T")[0]}.xlsx`);},
+    ...blockProps,
   };
 
   // ── Promo dashboard config ──
@@ -750,16 +785,17 @@ export default function App(){
     accent:"#e11d48",reimportLabel:"Promo",raw:promoRaw,enriched:promoEnriched,
     stats:[{label:"Total Records",value:promoRaw.length,clr:"#e11d48",Icon:CreditCard},{label:"High Discount",value:promoHighDiscount.length,clr:"#dc2626",Icon:AlertTriangle},{label:"Same Card",value:promoSameCard.length,clr:"#d97706",Icon:Users},{label:"Same Wallet",value:promoSameWallet.length,clr:"#7c3aed",Icon:ShieldAlert},{label:"Fake Domain",value:promoFakeDomain.length,clr:"#581c87",Icon:ShieldAlert}],
     tabs:[
-      {id:"highdiscount",label:"💸 High Discount",rows:promoHighDiscount,accent:"#dc2626",renderCard:(r,i,ac)=><PromoCard key={i} r={r} accent={ac} badgeLabel="HIGH DISCOUNT"/>},
-      {id:"samecard",label:"💳 Same Card",rows:promoSameCard,accent:"#d97706",renderCard:(r,i,ac)=><PromoAbuserCard key={i} r={r} accent={ac} identLabel="Card"/>},
-      {id:"samewallet",label:"👛 Same Wallet",rows:promoSameWallet,accent:"#7c3aed",renderCard:(r,i,ac)=><PromoAbuserCard key={i} r={r} accent={ac} identLabel="Wallet"/>},
-      {id:"fakedomain",label:"📧 Fake Domain",rows:promoFakeDomain,accent:"#581c87",renderCard:(r,i,ac)=><PromoCard key={i} r={r} accent={ac} badgeLabel="FAKE DOMAIN"/>},
+      {id:"highdiscount",label:"💸 High Discount",rows:promoHighDiscount.filter(r=>!isBlocked(r.email)),accent:"#dc2626",renderCard:(r,i,ac)=><PromoCard key={i} r={r} accent={ac} badgeLabel="HIGH DISCOUNT" onBlock={e=>handleBlock(e,"promo")} isBlocked={isBlocked} blockingEmail={blockingEmail}/>},
+      {id:"samecard",label:"💳 Same Card",rows:promoSameCard.map(r=>({...r,emails:r.emails.filter(e=>!isBlocked(e))})).filter(r=>r.emails.length>=2),accent:"#d97706",renderCard:(r,i,ac)=><PromoAbuserCard key={i} r={r} accent={ac} identLabel="Card"/>},
+      {id:"samewallet",label:"👛 Same Wallet",rows:promoSameWallet.map(r=>({...r,emails:r.emails.filter(e=>!isBlocked(e))})).filter(r=>r.emails.length>=2),accent:"#7c3aed",renderCard:(r,i,ac)=><PromoAbuserCard key={i} r={r} accent={ac} identLabel="Wallet"/>},
+      {id:"fakedomain",label:"📧 Fake Domain",rows:promoFakeDomain.filter(r=>!isBlocked(r.email)),accent:"#581c87",renderCard:(r,i,ac)=><PromoCard key={i} r={r} accent={ac} badgeLabel="FAKE DOMAIN" onBlock={e=>handleBlock(e,"promo")} isBlocked={isBlocked} blockingEmail={blockingEmail}/>},
     ],
     onReimport:()=>{resetPromo();setPromoModal(true);setPromoStep("drop");setPromoRows([]);setPromoErr("");},
     showRaw:promoShowRaw,setShowRaw:setPromoShowRaw,
     previewCols:["User Email","User Name","Promo Code","Discount Amount","Order Status","Card Number","Wallet Num","Created At"],
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>{const wb=XLSX.utils.book_new();[["HighDiscount",promoHighDiscount],["SameCard",promoSameCard],["SameWallet",promoSameWallet],["FakeDomain",promoFakeDomain]].forEach(([name,rows])=>{const data=rows.map(r=>({"Email":r.email||r.card||r.wallet||"—","Names":(r.custNames||[]).join(", ")||"—","Promo Codes":(r.promoCodes||[]).join(", ")||"—","Discount (EGP)":r.totalDiscount||0,"Tx Count":r.txCount,"Reason":(r.reasons||[]).join(" | ")}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`Promo_Abuse_${new Date().toISOString().split("T")[0]}.xlsx`);},
+    ...blockProps,
   };
 
   // ── Empty state component ──
@@ -865,6 +901,33 @@ export default function App(){
           <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 8px rgba(0,0,0,0.08)",overflow:"hidden"}}>{logs.length===0?(<div style={{padding:60,textAlign:"center",color:"#94a3b8",fontSize:14}}>📋 No audit events yet.</div>):(<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#1e293b"}}>{["#","Time","User","Action","Platform","Records","Details"].map(h=>(<th key={h} style={{padding:"12px 18px",textAlign:"left",fontWeight:700,color:"#94a3b8",fontSize:11,whiteSpace:"nowrap",letterSpacing:0.8,textTransform:"uppercase"}}>{h}</th>))}</tr></thead><tbody>{logs.map((l,i)=>(<tr key={l.id} style={{borderBottom:"1px solid #f1f5f9",background:i%2===0?"#fafafa":"#fff",verticalAlign:"top"}}><td style={{padding:"14px 18px",color:"#94a3b8",fontSize:12,fontWeight:600}}>#{logs.length-i}</td><td style={{padding:"14px 18px",fontSize:12,fontFamily:"monospace",color:"#334155",whiteSpace:"nowrap"}}>{l.time}</td><td style={{padding:"14px 18px"}}><div style={{display:"inline-flex",alignItems:"center",gap:6,background:"#1e293b",color:"#a5b4fc",padding:"4px 10px",borderRadius:20,fontSize:12,fontWeight:700}}>{l.user}</div></td><td style={{padding:"14px 18px"}}><div style={{display:"inline-flex",alignItems:"center",gap:5,background:"#dcfce7",color:"#16a34a",padding:"4px 10px",borderRadius:6,fontSize:12,fontWeight:700}}>📥 {l.action}</div></td><td style={{padding:"14px 18px"}}><div style={{display:"inline-flex",alignItems:"center",gap:6,padding:"4px 12px",borderRadius:8,fontSize:12,fontWeight:700,background:`${platformClr[l.platform]||"#64748b"}18`,color:platformClr[l.platform]||"#64748b"}}>{l.platform}</div></td><td style={{padding:"14px 18px",fontWeight:700,color:"#0f172a",fontSize:14}}>{(l.records||0).toLocaleString()}</td><td style={{padding:"14px 18px",fontSize:12,color:"#475569",maxWidth:400,lineHeight:1.7}}>{l.details||"—"}</td></tr>))}</tbody></table></div>)}</div>
         </div>);
       })()}
+
+      {/* Settings */}
+      {tab==="settings"&&currentUser.role==="superadmin"&&<div style={{padding:"24px 28px",maxWidth:1100,margin:"0 auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+          <div><div style={{fontWeight:800,fontSize:18,color:"#0f172a"}}>⚙ Settings — Blocked Emails</div><div style={{fontSize:13,color:"#64748b",marginTop:3}}>Blocked emails are hidden globally across all platforms on every upload.</div></div>
+          <div style={{fontSize:13,fontWeight:700,color:"#dc2626",background:"#fef2f2",border:"1px solid #fca5a5",padding:"7px 16px",borderRadius:9}}>{blockedList.length} blocked</div>
+        </div>
+        {blockedList.length===0?(
+          <div style={{background:"#fff",borderRadius:16,padding:60,textAlign:"center",color:"#94a3b8",fontSize:14,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>✅ No emails are blocked yet. Use the <b>Block</b> button on any fraud card to add one.</div>
+        ):(
+          <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 8px rgba(0,0,0,0.08)",overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead><tr style={{background:"#1e293b"}}>{["Email","Blocked By","Platform","Note","Blocked At","Action"].map(h=><th key={h} style={{padding:"12px 18px",textAlign:"left",fontWeight:700,color:"#94a3b8",fontSize:11,whiteSpace:"nowrap",letterSpacing:0.8,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
+              <tbody>{blockedList.map((b,i)=>(
+                <tr key={b.entity_value} style={{borderBottom:i<blockedList.length-1?"1px solid #f1f5f9":"none",background:i%2===0?"#fafafa":"#fff"}}>
+                  <td style={{padding:"14px 18px"}}><span style={{fontWeight:700,fontSize:13,color:"#0f172a",wordBreak:"break-all"}}>{b.entity_value}</span>{isDisposable(b.entity_value)&&<span style={{marginLeft:8,background:"#fee2e2",color:"#b91c1c",padding:"2px 7px",borderRadius:4,fontSize:11,fontWeight:700}}>⚠ Non-wl</span>}</td>
+                  <td style={{padding:"14px 18px"}}><span style={{background:"#1e293b",color:"#a5b4fc",padding:"4px 10px",borderRadius:20,fontSize:12,fontWeight:700}}>{b.blocked_by}</span></td>
+                  <td style={{padding:"14px 18px"}}>{b.platform?<span style={{background:"#f0f9ff",color:"#0369a1",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:600}}>{b.platform}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td>
+                  <td style={{padding:"14px 18px",fontSize:12,color:"#475569"}}>{b.note||"—"}</td>
+                  <td style={{padding:"14px 18px",fontSize:11,fontFamily:"monospace",color:"#64748b",whiteSpace:"nowrap"}}>{b.created_at?new Date(b.created_at).toLocaleString():"—"}</td>
+                  <td style={{padding:"14px 18px"}}><button onClick={()=>handleUnblock(b.entity_value)} style={{padding:"6px 14px",background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,color:"#16a34a",display:"flex",alignItems:"center",gap:5}}>🔓 Unblock</button></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>}
     </div>
 
     {/* Modals */}

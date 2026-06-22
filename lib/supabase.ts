@@ -161,6 +161,58 @@ export async function logAuditEntry(entry: {
 // ── buildAlerts helpers ────────────────────────────────────────────────────────
 // Converts the app's detection result arrays into FraudAlertPayload rows.
 
+// ── Blocked entities ───────────────────────────────────────────────────────────
+
+export async function loadBlockedEmails(): Promise<
+  { entity_value: string; blocked_by: string; platform: string | null; note: string | null; created_at: string }[]
+> {
+  const { data, error } = await supabase
+    .from("blocked_entities")
+    .select("entity_value, blocked_by, platform, note, created_at")
+    .eq("entity_type", "email")
+    .order("created_at", { ascending: false });
+  if (error) {
+    console.error("[Supabase] loadBlockedEmails error:", error.message);
+    return [];
+  }
+  return data ?? [];
+}
+
+export async function blockEmail(
+  email: string,
+  blocked_by: string,
+  platform?: string,
+  note?: string
+): Promise<boolean> {
+  const { error } = await supabase.from("blocked_entities").upsert(
+    {
+      entity_value: email.toLowerCase().trim(),
+      entity_type: "email",
+      blocked_by,
+      platform: platform ?? null,
+      note: note ?? null,
+    },
+    { onConflict: "entity_value" }
+  );
+  if (error) {
+    console.error("[Supabase] blockEmail error:", error.message);
+    return false;
+  }
+  return true;
+}
+
+export async function unblockEmail(email: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("blocked_entities")
+    .delete()
+    .eq("entity_value", email.toLowerCase().trim());
+  if (error) {
+    console.error("[Supabase] unblockEmail error:", error.message);
+    return false;
+  }
+  return true;
+}
+
 export function buildCCAlerts(
   fraud: any[],
   platform: Platform
