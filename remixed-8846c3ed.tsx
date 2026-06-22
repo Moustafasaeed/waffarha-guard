@@ -595,11 +595,12 @@ export default function App(){
   const fawryBadge=fawryHighAmt.length+fawrySuspected.length+fawryFakeDom.length;
   const promoBadge=promoHighDiscount.length+promoSameCard.length+promoSameWallet.length+promoFakeDomain.length;
 
-  if(!currentUser)return <LoginScreen onLogin={setCurrentUser}/>;
-
   // ── Load / refresh blocked emails from Supabase ──
+  // Must be before the early return to satisfy React hooks rules
   const refreshBlocked=async()=>{const rows=await loadBlockedEmails();setBlockedList(rows);setBlockedEmails(new Set(rows.map(r=>r.entity_value)));};
   useEffect(()=>{if(currentUser)refreshBlocked();},[currentUser?.username]);
+
+  if(!currentUser)return <LoginScreen onLogin={setCurrentUser}/>;
 
   const isBlocked=(email)=>!!email&&blockedEmails.has(email.toLowerCase().trim());
 
