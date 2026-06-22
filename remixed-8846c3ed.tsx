@@ -108,16 +108,17 @@ function ResultCard({r,accentColor,cfg={},activeFilter,customRows,customHeader})
   const hideAuthMsg=cfg.hideAuthMsg===true;
   const hideStatus=cfg.hideStatus===true;
   const showBiller=cfg.showBiller===true;
+  const showPayMethod=cfg.showPayMethod===true;
 
   // Build flat tx rows from ccTxRows
   const allTxRows=[];
   if(r.uniqueCCs&&r.ccTxRows){r.uniqueCCs.forEach(cc=>{const txs=(r.ccTxRows[cc])||[];txs.forEach(tx=>allTxRows.push({cc,...tx}));});}
 
-  const statusClr=s=>{const lw=(s||"").toLowerCase();if(lw==="true"||lw==="captured"||lw==="authorised"||lw==="authorized")return{bg:"#dcfce7",cl:"#16a34a"};if(lw==="false"||lw==="declined"||lw==="failed")return{bg:"#fee2e2",cl:"#dc2626"};return{bg:"#f1f5f9",cl:"#64748b"};};
+  const statusClr=s=>{const lw=(s||"").toLowerCase();if(lw==="true"||lw==="captured"||lw==="authorised"||lw==="authorized"||lw==="paid")return{bg:"#dcfce7",cl:"#16a34a"};if(lw==="false"||lw==="declined"||lw==="failed")return{bg:"#fee2e2",cl:"#dc2626"};return{bg:"#f1f5f9",cl:"#64748b"};};
   const authClr=msg=>{if(["Authorised","Authorized"].includes(msg))return"#16a34a";if(msg==="User does not have a wallet")return"#dc2626";return"#475569";};
 
   const tableRows=customRows||allTxRows;
-  const tableHeader=customHeader||[ccLabel,cartLabel,"Timestamp",...(hideAuthMsg?[]:["Auth Message"]),...(hideStatus?[]:["Status"]),...(showBiller?["Service Biller"]:[]),...(showECI?["ECI"]:[]),...(showCountries?["Countries"]:[]),"Amount (EGP)"];
+  const tableHeader=customHeader||[ccLabel,cartLabel,"Timestamp",...(hideAuthMsg?[]:["Auth Message"]),...(hideStatus?[]:["Status"]),...(showBiller?["Service Biller"]:[]),...(showPayMethod?["Payment Method"]:[]),...(showECI?["ECI"]:[]),...(showCountries?["Countries"]:[]),"Amount (EGP)"];
 
   return(
     <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 12px rgba(0,0,0,0.07)",border:`1px solid ${accentColor}22`,marginBottom:16,overflow:"hidden"}}>
@@ -201,6 +202,8 @@ function ResultCard({r,accentColor,cfg={},activeFilter,customRows,customHeader})
                     </td>}
                     {/* Service Biller */}
                     {showBiller&&<td style={{padding:"9px 14px",whiteSpace:"nowrap"}}>{tx.biller?<span style={{background:"#fef3c7",color:"#92400e",border:"1px solid #fde68a",padding:"2px 9px",borderRadius:6,fontSize:11,fontWeight:600}}>{tx.biller}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td>}
+                    {/* Payment Method */}
+                    {showPayMethod&&<td style={{padding:"9px 14px",whiteSpace:"nowrap"}}>{tx.payMethod?<span style={{background:"#eff6ff",color:"#2563eb",border:"1px solid #bfdbfe",padding:"2px 9px",borderRadius:6,fontSize:11,fontWeight:600}}>{tx.payMethod}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td>}
                     {/* ECI */}
                     {tx.eci!==undefined&&<td style={{padding:"9px 14px",fontFamily:"monospace",fontWeight:700,color:"#334155",fontSize:12}}>{tx.eci||"—"}</td>}
                     {/* Countries */}
@@ -637,11 +640,11 @@ export default function App(){
 
   // ── Admin dashboard config ──
   // Admin: build ccTxRows using real sheet fields (no authMsg, use timestamp/status/amt from sheet)
-  const makeAdminTxRows=rows=>(rows||[]).map(rx=>({cartId:rx._txId||"",timestamp:rx._timestamp||"",authMsg:null,orderStatus:rx._status||"",amt:rx._amt||0,biller:rx._biller||""}));
+  const makeAdminTxRows=rows=>(rows||[]).map(rx=>({cartId:rx._txId||"",timestamp:rx._timestamp||"",authMsg:null,orderStatus:rx._status||"",amt:rx._amt||0,biller:rx._biller||"",payMethod:rx._payMethod||""}));
   const adminSuspectedWithTxRows=adminSuspected.map(r=>({...r,uniqueCCs:[r.userId||"—"],ccTxRows:{[r.userId||"—"]:makeAdminTxRows(r.rows)},email:r.email||"",custNames:r.custNames||[]}));
   const adminPayMethodsAdapted=adminPayMethods.map(r=>({...r,uniqueCCs:r.uniqueMethods||[],ccTxRows:Object.fromEntries((r.uniqueMethods||[]).map(m=>[m,makeAdminTxRows((r.rows||[]).filter(rx=>rx._payMethod===m))]))}));
-  const adminHighAmtAdapted=adminHighAmt.map(r=>({...r,uniqueCCs:["—"],ccTxRows:{"—":makeAdminTxRows(r.rows)}}));
-  const adminFakeDomAdapted=adminFakeDom.map(r=>({...r,uniqueCCs:["—"],ccTxRows:{"—":makeAdminTxRows(r.rows)}}));
+  const adminHighAmtAdapted=adminHighAmt.map(r=>({...r,uniqueCCs:r.uniqueMethods&&r.uniqueMethods.length>0?r.uniqueMethods:["—"],ccTxRows:r.uniqueMethods&&r.uniqueMethods.length>0?Object.fromEntries(r.uniqueMethods.map(m=>[m,makeAdminTxRows(r.rows.filter(rx=>rx._payMethod===m))])):{"—":makeAdminTxRows(r.rows)}}));
+  const adminFakeDomAdapted=adminFakeDom.map(r=>({...r,uniqueCCs:r.uniqueMethods&&r.uniqueMethods.length>0?r.uniqueMethods:["—"],ccTxRows:r.uniqueMethods&&r.uniqueMethods.length>0?Object.fromEntries(r.uniqueMethods.map(m=>[m,makeAdminTxRows(r.rows.filter(rx=>rx._payMethod===m))])):{"—":makeAdminTxRows(r.rows)}}));
   const adminRechargeAdapted=adminRechargeAbusers.map(r=>({...r,uniqueCCs:[r.recharge||"—"],ccTxRows:{[r.recharge||"—"]:makeAdminTxRows(r.rows)},email:r.emails.join(", ")||"",custNames:[]}));
 
   const adminConfig={
@@ -649,10 +652,10 @@ export default function App(){
     stats:[{label:"Total Records",value:adminSheetRaw.length,clr:"#0ea5e9",Icon:CreditCard},{label:"Pay Method Abuse",value:adminPayMethods.length,clr:"#dc2626",Icon:AlertTriangle},{label:"Suspected",value:adminSuspected.length,clr:"#7c3aed",Icon:Users},{label:"High Amounts",value:adminHighAmt.length,clr:"#065f46",Icon:DollarSign},{label:"Fake Domain",value:adminFakeDom.length,clr:"#581c87",Icon:ShieldAlert},{label:"Recharge Abusers",value:adminRechargeAbusers.length,clr:"#7c3aed",Icon:ShieldAlert}],
     tabs:[
       {id:"paymethods",label:"💳 Pay Method Abuse",rows:adminPayMethodsAdapted,accent:"#dc2626",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
-      {id:"suspected",label:"🕵️ Suspected",rows:adminSuspectedWithTxRows,accent:"#7c3aed",cfg:{ccLabel:"User ID",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
+      {id:"suspected",label:"🕵️ Suspected",rows:adminSuspectedWithTxRows,accent:"#7c3aed",cfg:{ccLabel:"User ID",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true,showPayMethod:true}},
       {id:"highamount",label:"💰 High Amounts",rows:adminHighAmtAdapted,accent:"#065f46",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
       {id:"fakedomain",label:"📧 Fake Domain",rows:adminFakeDomAdapted,accent:"#7c3aed",cfg:{ccLabel:"Payment Method",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
-      {id:"rechargeabuser",label:"📱 Recharge Abusers",rows:adminRechargeAdapted,accent:"#7c3aed",cfg:{ccLabel:"Recharge Number",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true}},
+      {id:"rechargeabuser",label:"📱 Recharge Abusers",rows:adminRechargeAdapted,accent:"#7c3aed",cfg:{ccLabel:"Recharge Number",cartLabel:"Transaction ID",showOS:true,showECI:false,showCountries:false,hideAuthMsg:true,showBiller:true,showPayMethod:true}},
     ],
     onReimport:()=>{resetAdmin();setAdminModal(true);setAdminStep("drop");setAdminRows([]);setAdminErr("");},
     showRaw:adminShowRaw,setShowRaw:setAdminShowRaw,
