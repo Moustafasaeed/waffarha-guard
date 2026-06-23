@@ -574,6 +574,7 @@ export default function App(){
   const [blockingEmail,setBlockingEmail]=useState(null);
   const [blockModal,setBlockModal]=useState(null); // {email, platform}
   const [blockNote,setBlockNote]=useState("");
+  const [blockNoteErr,setBlockNoteErr]=useState(false);
 
 
   // ── Import handlers ──
@@ -644,11 +645,12 @@ export default function App(){
   };
 
   // Opens the block reason modal instead of blocking immediately
-  const openBlockModal=(email,platform)=>{setBlockModal({email,platform});setBlockNote("");};
+  const openBlockModal=(email,platform)=>{setBlockModal({email,platform});setBlockNote("");setBlockNoteErr(false);};
   const confirmBlock=async()=>{
     if(!blockModal)return;
-    await handleBlock(blockModal.email,blockModal.platform,blockNote.trim()||undefined);
-    setBlockModal(null);setBlockNote("");
+    if(!blockNote.trim()){setBlockNoteErr(true);return;}
+    await handleBlock(blockModal.email,blockModal.platform,blockNote.trim());
+    setBlockModal(null);setBlockNote("");setBlockNoteErr(false);
   };
   const handleUnblock=async(email)=>{
     const key=email.toLowerCase().trim();
@@ -962,31 +964,117 @@ export default function App(){
       })()}
 
       {/* Settings */}
-      {tab==="settings"&&currentUser.role==="superadmin"&&<div style={{padding:"24px 28px",maxWidth:1100,margin:"0 auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
-          <div><div style={{fontWeight:800,fontSize:18,color:"#0f172a"}}>⚙ Settings — Blocked Emails</div><div style={{fontSize:13,color:"#64748b",marginTop:3}}>Blocked emails are hidden globally across all platforms on every upload.</div></div>
-          <div style={{fontSize:13,fontWeight:700,color:"#dc2626",background:"#fef2f2",border:"1px solid #fca5a5",padding:"7px 16px",borderRadius:9}}>{blockedList.length} blocked</div>
-        </div>
-        {blockedList.length===0?(
-          <div style={{background:"#fff",borderRadius:16,padding:60,textAlign:"center",color:"#94a3b8",fontSize:14,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>✅ No emails are blocked yet. Use the <b>Block</b> button on any fraud card to add one.</div>
-        ):(
-          <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 8px rgba(0,0,0,0.08)",overflow:"hidden"}}>
-            <table style={{width:"100%",borderCollapse:"collapse"}}>
-              <thead><tr style={{background:"#1e293b"}}>{["Email","Blocked By","Platform","Note","Blocked At","Action"].map(h=><th key={h} style={{padding:"12px 18px",textAlign:"left",fontWeight:700,color:"#94a3b8",fontSize:11,whiteSpace:"nowrap",letterSpacing:0.8,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
-              <tbody>{blockedList.map((b,i)=>(
-                <tr key={b.entity_value} style={{borderBottom:i<blockedList.length-1?"1px solid #f1f5f9":"none",background:i%2===0?"#fafafa":"#fff"}}>
-                  <td style={{padding:"14px 18px"}}><span style={{fontWeight:700,fontSize:13,color:"#0f172a",wordBreak:"break-all"}}>{b.entity_value}</span>{isDisposable(b.entity_value)&&<span style={{marginLeft:8,background:"#fee2e2",color:"#b91c1c",padding:"2px 7px",borderRadius:4,fontSize:11,fontWeight:700}}>⚠ Non-wl</span>}</td>
-                  <td style={{padding:"14px 18px"}}><span style={{background:"#1e293b",color:"#a5b4fc",padding:"4px 10px",borderRadius:20,fontSize:12,fontWeight:700}}>{b.blocked_by}</span></td>
-                  <td style={{padding:"14px 18px"}}>{b.platform?<span style={{background:"#f0f9ff",color:"#0369a1",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:600}}>{b.platform}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td>
-                  <td style={{padding:"14px 18px",fontSize:12,color:"#475569"}}>{b.note||"—"}</td>
-                  <td style={{padding:"14px 18px",fontSize:11,fontFamily:"monospace",color:"#64748b",whiteSpace:"nowrap"}}>{b.created_at?new Date(b.created_at).toLocaleString():"—"}</td>
-                  <td style={{padding:"14px 18px"}}><button onClick={()=>handleUnblock(b.entity_value)} style={{padding:"6px 14px",background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,color:"#16a34a",display:"flex",alignItems:"center",gap:5}}>🔓 Unblock</button></td>
-                </tr>
-              ))}</tbody>
-            </table>
+      {tab==="settings"&&currentUser.role==="superadmin"&&(()=>{
+        // Build per-email activity across all loaded platforms
+        const PLATFORM_SOURCES=[
+          {name:"PayTabs",clr:"#7c3aed",enriched:ptEnriched,amtKey:"_amt"},
+          {name:"Noon",clr:"#f59e0b",enriched:noonEnriched,amtKey:"_amt"},
+          {name:"PayMob",clr:"#2563eb",enriched:pmWEnriched,amtKey:"_amt"},
+          {name:"PayMob BNPL",clr:"#7c3aed",enriched:pmBEnriched,amtKey:"_amt"},
+          {name:"Admin",clr:"#0ea5e9",enriched:adminEnriched,amtKey:"_amt"},
+          {name:"Fawry",clr:"#f97316",enriched:fawryEnriched,amtKey:"_requested"},
+          {name:"Promo",clr:"#e11d48",enriched:promoEnriched,amtKey:"_discountAmt"},
+        ];
+        const blockedActivity=blockedList.map(b=>{
+          const key=b.entity_value.toLowerCase().trim();
+          const platforms=PLATFORM_SOURCES.map(src=>{
+            const rows=(src.enriched||[]).filter(r=>(r._email||"").toLowerCase()===key);
+            if(rows.length===0)return null;
+            const total=rows.reduce((s,r)=>s+(parseFloat(r[src.amtKey])||0),0);
+            return{name:src.name,clr:src.clr,count:rows.length,total};
+          }).filter(Boolean);
+          const totalTx=platforms.reduce((s,p)=>s+p.count,0);
+          const totalAmt=platforms.reduce((s,p)=>s+p.total,0);
+          return{...b,platforms,totalTx,totalAmt};
+        });
+        const hasAnyData=PLATFORM_SOURCES.some(s=>(s.enriched||[]).length>0);
+        return(
+        <div style={{padding:"24px 28px",maxWidth:1200,margin:"0 auto"}}>
+          {/* Header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+            <div>
+              <div style={{fontWeight:800,fontSize:20,color:"#0f172a"}}>🚫 Blocked Accounts</div>
+              <div style={{fontSize:13,color:"#64748b",marginTop:3}}>Hidden globally across all platforms · activity shown from current session data</div>
+            </div>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              {!hasAnyData&&<span style={{fontSize:12,color:"#d97706",background:"#fef3c7",padding:"5px 12px",borderRadius:8,fontWeight:600}}>⚠ Import data to see activity</span>}
+              <div style={{fontSize:13,fontWeight:700,color:"#dc2626",background:"#fef2f2",border:"1px solid #fca5a5",padding:"7px 16px",borderRadius:9}}>{blockedList.length} blocked</div>
+            </div>
           </div>
-        )}
-      </div>}
+
+          {blockedList.length===0?(
+            <div style={{background:"#fff",borderRadius:16,padding:72,textAlign:"center",color:"#94a3b8",fontSize:14,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+              <div style={{fontSize:40,marginBottom:12}}>✅</div>
+              <div style={{fontWeight:700,fontSize:16,color:"#475569",marginBottom:6}}>No blocked accounts yet</div>
+              <div>Use the <b>🚫 Block</b> button on any fraud card to add one.</div>
+            </div>
+          ):(
+            <div style={{display:"flex",flexDirection:"column",gap:16}}>
+              {blockedActivity.map((b,i)=>(
+                <div key={b.entity_value} style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 12px rgba(0,0,0,0.07)",border:"1.5px solid #fee2e2",overflow:"hidden"}}>
+                  {/* Card header */}
+                  <div style={{display:"flex",alignItems:"stretch"}}>
+                    {/* Red block badge */}
+                    <div style={{background:"#dc2626",width:72,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px 8px",gap:4}}>
+                      <span style={{fontSize:22}}>🚫</span>
+                      <div style={{color:"rgba(255,255,255,0.8)",fontSize:10,fontWeight:700,letterSpacing:0.5}}>BLOCKED</div>
+                    </div>
+                    {/* Email + meta */}
+                    <div style={{flex:1,padding:"16px 20px",borderRight:"1px solid #f1f5f9"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                        <span style={{fontWeight:800,fontSize:15,color:"#0f172a",wordBreak:"break-all"}}>{b.entity_value}</span>
+                        {isDisposable(b.entity_value)&&<span style={{background:"#fee2e2",color:"#b91c1c",padding:"2px 7px",borderRadius:4,fontSize:11,fontWeight:700,flexShrink:0}}>⚠ Non-wl</span>}
+                      </div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                        <span style={{background:"#1e293b",color:"#a5b4fc",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700}}>{b.blocked_by}</span>
+                        {b.platform&&<span style={{background:"#f0f9ff",color:"#0369a1",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:600}}>{b.platform}</span>}
+                        <span style={{fontSize:12,color:"#94a3b8",fontFamily:"monospace"}}>{b.created_at?new Date(b.created_at).toLocaleString():"—"}</span>
+                      </div>
+                    </div>
+                    {/* Reason */}
+                    <div style={{padding:"16px 20px",display:"flex",flexDirection:"column",justifyContent:"center",minWidth:220,maxWidth:320,borderRight:"1px solid #f1f5f9"}}>
+                      <div style={{fontSize:10,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Reason</div>
+                      <div style={{fontSize:13,color:"#334155",lineHeight:1.5,fontStyle:b.note?"normal":"italic"}}>{b.note||<span style={{color:"#cbd5e1"}}>No reason provided</span>}</div>
+                    </div>
+                    {/* Stats */}
+                    <div style={{background:"#f8fafc",padding:"16px 20px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minWidth:110,borderRight:"1px solid #f1f5f9"}}>
+                      <div style={{fontSize:10,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Platforms</div>
+                      <div style={{fontWeight:900,color:"#dc2626",fontSize:26,lineHeight:1}}>{b.platforms.length}</div>
+                      <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{b.totalTx} tx</div>
+                    </div>
+                    {/* Unblock */}
+                    <div style={{padding:"16px 14px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <button onClick={()=>handleUnblock(b.entity_value)} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"10px 14px",background:"#f0fdf4",border:"1.5px solid #86efac",borderRadius:10,cursor:"pointer"}}>
+                        <span style={{fontSize:18}}>🔓</span>
+                        <span style={{fontSize:10,fontWeight:700,color:"#16a34a",whiteSpace:"nowrap"}}>Unblock</span>
+                      </button>
+                    </div>
+                  </div>
+                  {/* Platform activity row */}
+                  {b.platforms.length>0&&(
+                    <div style={{borderTop:"1px solid #f1f5f9",padding:"12px 20px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+                      <span style={{fontSize:11,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginRight:4}}>Activity:</span>
+                      {b.platforms.map(p=>(
+                        <div key={p.name} style={{display:"flex",alignItems:"center",gap:6,background:`${p.clr}12`,border:`1px solid ${p.clr}30`,borderRadius:8,padding:"5px 12px"}}>
+                          <span style={{width:8,height:8,borderRadius:"50%",background:p.clr,display:"inline-block",flexShrink:0}}/>
+                          <span style={{fontSize:12,fontWeight:700,color:p.clr}}>{p.name}</span>
+                          <span style={{fontSize:12,color:"#64748b"}}>{p.count} tx</span>
+                          {p.total>0&&<span style={{fontSize:12,color:"#0f172a",fontWeight:600}}>· EGP {p.total.toLocaleString()}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {b.platforms.length===0&&hasAnyData&&(
+                    <div style={{borderTop:"1px solid #f1f5f9",padding:"10px 20px"}}>
+                      <span style={{fontSize:12,color:"#94a3b8"}}>No activity found in current session data for this email.</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>);
+      })()}
     </div>
 
     {/* Modals */}
@@ -1008,8 +1096,9 @@ export default function App(){
           <div style={{fontSize:14,fontWeight:700,color:"#dc2626",wordBreak:"break-all"}}>{blockModal.email}</div>
         </div>
         <div style={{marginBottom:24}}>
-          <label style={{fontSize:13,fontWeight:700,color:"#334155",display:"block",marginBottom:8}}>Reason <span style={{color:"#94a3b8",fontWeight:400}}>(optional)</span></label>
-          <textarea value={blockNote} onChange={e=>setBlockNote(e.target.value)} placeholder="e.g. Multiple chargeback requests, confirmed fraud…" rows={3} style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,color:"#334155",outline:"none",resize:"vertical",fontFamily:"inherit"}} onKeyDown={e=>{if(e.key==="Enter"&&e.ctrlKey)confirmBlock();}}/>
+          <label style={{fontSize:13,fontWeight:700,color:"#334155",display:"block",marginBottom:8}}>Reason <span style={{color:"#dc2626"}}>*</span></label>
+          <textarea value={blockNote} onChange={e=>{setBlockNote(e.target.value);if(e.target.value.trim())setBlockNoteErr(false);}} placeholder="e.g. Multiple chargeback requests, confirmed fraud…" rows={3} style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${blockNoteErr?"#dc2626":"#e2e8f0"}`,fontSize:13,color:"#334155",outline:"none",resize:"vertical",fontFamily:"inherit",background:blockNoteErr?"#fef2f2":"#fff"}} onKeyDown={e=>{if(e.key==="Enter"&&e.ctrlKey)confirmBlock();}}/>
+          {blockNoteErr&&<div style={{color:"#dc2626",fontSize:12,fontWeight:600,marginTop:4}}>⚠ Reason is required before blocking.</div>}
           <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Ctrl+Enter to confirm</div>
         </div>
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
