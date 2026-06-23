@@ -1004,8 +1004,8 @@ export default function App(){
           emailMap[a.entity_email].types.add(a.alert_type);
         });
         const repeatOffenders=Object.entries(emailMap)
-          .filter(([,v])=>v.platforms.size>=2)
-          .map(([email,v])=>({email,platforms:[...v.platforms],count:v.count,amt:v.amt,types:[...v.types],blocked:blockedEmails.has(email)}))
+          .filter(([email,v])=>v.platforms.size>=2&&!blockedEmails.has(email))
+          .map(([email,v])=>({email,platforms:[...v.platforms],count:v.count,amt:v.amt,types:[...v.types]}))
           .sort((a,b)=>b.platforms.length-a.platforms.length||b.count-a.count)
           .slice(0,25);
 
@@ -1165,9 +1165,7 @@ export default function App(){
                       <td style={{padding:"12px 18px",fontWeight:800,color:"#dc2626",fontSize:14}}>{r.count}</td>
                       <td style={{padding:"12px 18px",fontWeight:700,color:"#f97316"}}>EGP {Math.round(r.amt).toLocaleString()}</td>
                       <td style={{padding:"12px 18px"}}>
-                        {r.blocked
-                          ?<span style={{background:"#fee2e2",color:"#dc2626",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:700}}>🚫 Blocked</span>
-                          :<button onClick={()=>openBlockModal(r.email,"dashboard")} style={{background:"#fef2f2",border:"1px solid #fca5a5",color:"#dc2626",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>Block</button>}
+                        <button onClick={()=>openBlockModal(r.email,"dashboard")} style={{background:"#fef2f2",border:"1px solid #fca5a5",color:"#dc2626",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>🚫 Block</button>
                       </td>
                     </tr>
                   ))}</tbody>
