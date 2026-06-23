@@ -572,6 +572,8 @@ export default function App(){
   const [blockedEmails,setBlockedEmails]=useState(new Set());
   const [blockedList,setBlockedList]=useState([]);
   const [blockingEmail,setBlockingEmail]=useState(null);
+  const [blockModal,setBlockModal]=useState(null); // {email, platform}
+  const [blockNote,setBlockNote]=useState("");
 
 
   // ── Import handlers ──
@@ -624,10 +626,10 @@ export default function App(){
 
   const isBlocked=(email)=>!!email&&blockedEmails.has(email.toLowerCase().trim());
 
-  const handleBlock=async(email,platform)=>{
+  const handleBlock=async(email,platform,note)=>{
     if(!email)return;
     const key=email.toLowerCase().trim();
-    const entry={entity_value:key,blocked_by:currentUser.username,platform:platform||null,note:null,created_at:new Date().toISOString()};
+    const entry={entity_value:key,blocked_by:currentUser.username,platform:platform||null,note:note||null,created_at:new Date().toISOString()};
     // 1. Write localStorage immediately — this is the source of truth
     const current=lsGetBlocked();
     const updated=[entry,...current.filter(b=>b.entity_value!==key)];
@@ -637,8 +639,16 @@ export default function App(){
     setBlockedList(updated);
     setBlockingEmail(key);
     // 3. Try Supabase in background — best effort, never wipes local state
-    try{await blockEmail(key,currentUser.username,platform||"unknown");}catch(e){console.error("blockEmail:",e);}
+    try{await blockEmail(key,currentUser.username,platform||"unknown",note||undefined);}catch(e){console.error("blockEmail:",e);}
     setBlockingEmail(null);
+  };
+
+  // Opens the block reason modal instead of blocking immediately
+  const openBlockModal=(email,platform)=>{setBlockModal({email,platform});setBlockNote("");};
+  const confirmBlock=async()=>{
+    if(!blockModal)return;
+    await handleBlock(blockModal.email,blockModal.platform,blockNote.trim()||undefined);
+    setBlockModal(null);setBlockNote("");
   };
   const handleUnblock=async(email)=>{
     const key=email.toLowerCase().trim();
@@ -656,7 +666,7 @@ export default function App(){
   const filterB=(arr)=>(arr||[]).filter(r=>!blockedEmails.has((r.email||"").toLowerCase().trim()));
 
   // ── Shared block props passed into every dashboard config ──
-  const blockProps={onBlock:handleBlock,isBlocked,blockingEmail};
+  const blockProps={onBlock:openBlockModal,isBlocked,blockingEmail};
   const unblocked=(arr)=>(arr||[]).filter(r=>!isBlocked(r.email));
   const unblockedGroup=(arr)=>(arr||[]).map(r=>({...r,emails:(r.emails||[]).filter(e=>!isBlocked(e))})).filter(r=>(r.emails||[]).length>=2);
 
@@ -834,10 +844,10 @@ export default function App(){
     accent:"#e11d48",reimportLabel:"Promo",raw:promoRaw,enriched:promoEnriched,
     stats:[{label:"Total Records",value:promoRaw.length,clr:"#e11d48",Icon:CreditCard},{label:"High Discount",value:promoHighDiscount.length,clr:"#dc2626",Icon:AlertTriangle},{label:"Same Card",value:promoSameCard.length,clr:"#d97706",Icon:Users},{label:"Same Wallet",value:promoSameWallet.length,clr:"#7c3aed",Icon:ShieldAlert},{label:"Fake Domain",value:promoFakeDomain.length,clr:"#581c87",Icon:ShieldAlert}],
     tabs:[
-      {id:"highdiscount",label:"💸 High Discount",rows:promoHighDiscount.filter(r=>!isBlocked(r.email)),accent:"#dc2626",renderCard:(r,i,ac)=><PromoCard key={i} r={r} accent={ac} badgeLabel="HIGH DISCOUNT" onBlock={e=>handleBlock(e,"promo")} isBlocked={isBlocked} blockingEmail={blockingEmail}/>},
+      {id:"highdiscount",label:"💸 High Discount",rows:promoHighDiscount.filter(r=>!isBlocked(r.email)),accent:"#dc2626",renderCard:(r,i,ac)=><PromoCard key={i} r={r} accent={ac} badgeLabel="HIGH DISCOUNT" onBlock={e=>openBlockModal(e,"promo")} isBlocked={isBlocked} blockingEmail={blockingEmail}/>},
       {id:"samecard",label:"💳 Same Card",rows:promoSameCard.map(r=>({...r,emails:r.emails.filter(e=>!isBlocked(e))})).filter(r=>r.emails.length>=2),accent:"#d97706",renderCard:(r,i,ac)=><PromoAbuserCard key={i} r={r} accent={ac} identLabel="Card"/>},
       {id:"samewallet",label:"👛 Same Wallet",rows:promoSameWallet.map(r=>({...r,emails:r.emails.filter(e=>!isBlocked(e))})).filter(r=>r.emails.length>=2),accent:"#7c3aed",renderCard:(r,i,ac)=><PromoAbuserCard key={i} r={r} accent={ac} identLabel="Wallet"/>},
-      {id:"fakedomain",label:"📧 Fake Domain",rows:promoFakeDomain.filter(r=>!isBlocked(r.email)),accent:"#581c87",renderCard:(r,i,ac)=><PromoCard key={i} r={r} accent={ac} badgeLabel="FAKE DOMAIN" onBlock={e=>handleBlock(e,"promo")} isBlocked={isBlocked} blockingEmail={blockingEmail}/>},
+      {id:"fakedomain",label:"📧 Fake Domain",rows:promoFakeDomain.filter(r=>!isBlocked(r.email)),accent:"#581c87",renderCard:(r,i,ac)=><PromoCard key={i} r={r} accent={ac} badgeLabel="FAKE DOMAIN" onBlock={e=>openBlockModal(e,"promo")} isBlocked={isBlocked} blockingEmail={blockingEmail}/>},
     ],
     onReimport:()=>{resetPromo();setPromoModal(true);setPromoStep("drop");setPromoRows([]);setPromoErr("");},
     showRaw:promoShowRaw,setShowRaw:setPromoShowRaw,
@@ -985,5 +995,28 @@ export default function App(){
     <ImportModal open={adminModal} title="Import Admin Sheet" accent="#0ea5e9" onClose={()=>setAdminModal(false)} onImport={doImportAdmin} rows={adminRows} setRows={setAdminRows} step={adminStep} setStep={setAdminStep} previewCols={["User Email","User Name","Payment Method","Service Biller","Status","Requested Amount"]} loading={adminLoading} setLoading={setAdminLoading} err={adminErr} setErr={setAdminErr}/>
     <ImportModal open={fawryModal} title="Import Fawry Sheet" accent="#f97316" onClose={()=>setFawryModal(false)} onImport={doImportFawry} rows={fawryRows} setRows={setFawryRows} step={fawryStep} setStep={setFawryStep} previewCols={["user","user email","Requested","Fawry Code","Status","Payment Method"]} loading={fawryLoading} setLoading={setFawryLoading} err={fawryErr} setErr={setFawryErr}/>
     <ImportModal open={promoModal} title="Import Promo Sheet" accent="#e11d48" onClose={()=>setPromoModal(false)} onImport={doImportPromo} rows={promoRows} setRows={setPromoRows} step={promoStep} setStep={setPromoStep} previewCols={["User Email","User Name","Promo Code","Discount Amount","Order Status","Card Number","Wallet Num"]} loading={promoLoading} setLoading={setPromoLoading} err={promoErr} setErr={setPromoErr}/>
+
+    {/* Block reason modal */}
+    {blockModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>{if(e.target===e.currentTarget){setBlockModal(null);setBlockNote("");}}}>
+      <div style={{background:"#fff",borderRadius:18,padding:"32px 36px",width:420,boxShadow:"0 20px 60px rgba(0,0,0,0.18)",border:"1px solid #fee2e2"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20}}>
+          <div style={{width:40,height:40,borderRadius:10,background:"#fef2f2",border:"1.5px solid #fca5a5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>🚫</div>
+          <div><div style={{fontWeight:800,fontSize:17,color:"#0f172a"}}>Block Account</div><div style={{fontSize:12,color:"#64748b",marginTop:2}}>This email will be hidden across all platforms</div></div>
+        </div>
+        <div style={{background:"#f8fafc",borderRadius:10,padding:"12px 14px",marginBottom:20,border:"1px solid #e2e8f0"}}>
+          <div style={{fontSize:11,color:"#94a3b8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Email</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#dc2626",wordBreak:"break-all"}}>{blockModal.email}</div>
+        </div>
+        <div style={{marginBottom:24}}>
+          <label style={{fontSize:13,fontWeight:700,color:"#334155",display:"block",marginBottom:8}}>Reason <span style={{color:"#94a3b8",fontWeight:400}}>(optional)</span></label>
+          <textarea value={blockNote} onChange={e=>setBlockNote(e.target.value)} placeholder="e.g. Multiple chargeback requests, confirmed fraud…" rows={3} style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,color:"#334155",outline:"none",resize:"vertical",fontFamily:"inherit"}} onKeyDown={e=>{if(e.key==="Enter"&&e.ctrlKey)confirmBlock();}}/>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Ctrl+Enter to confirm</div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={()=>{setBlockModal(null);setBlockNote("");}} style={{padding:"9px 20px",background:"#f1f5f9",border:"none",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:600,color:"#64748b"}}>Cancel</button>
+          <button onClick={confirmBlock} style={{padding:"9px 22px",background:"#dc2626",border:"none",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:700,color:"#fff",display:"flex",alignItems:"center",gap:6}}>🚫 Block</button>
+        </div>
+      </div>
+    </div>}
   </div>);
 }
