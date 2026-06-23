@@ -1041,6 +1041,34 @@ export default function App(){
           {dashLoading&&<div style={{textAlign:"center",padding:72,color:"#6366f1",fontSize:15,fontWeight:700}}>Loading historical data…</div>}
           {dashErr&&<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:12,padding:"14px 18px",color:"#dc2626",fontSize:13,marginBottom:20}}>⚠ {dashErr}</div>}
 
+          {/* Live blocked accounts — always visible regardless of Supabase data */}
+          <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 8px rgba(0,0,0,0.07)",overflow:"hidden",marginBottom:16,border:"1.5px solid #fee2e2"}}>
+            <div style={{padding:"18px 22px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fef2f2"}}>
+              <div>
+                <div style={{fontWeight:800,fontSize:15,color:"#dc2626"}}>🚫 Blocked Accounts — Live</div>
+                <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>Updates instantly when you block or unblock from any tab</div>
+              </div>
+              <div style={{background:"#dc2626",color:"#fff",padding:"5px 14px",borderRadius:8,fontSize:13,fontWeight:700}}>{blockedList.length} blocked</div>
+            </div>
+            {blockedList.length===0?(
+              <div style={{padding:32,textAlign:"center",color:"#94a3b8",fontSize:13}}>No blocked accounts yet.</div>
+            ):(
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead><tr style={{background:"#1e293b"}}>{["Email","Reason","Blocked By","Platform","Date","Action"].map(h=><th key={h} style={{padding:"11px 18px",textAlign:"left",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:0.8,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                <tbody>{blockedList.map((b,i)=>(
+                  <tr key={b.entity_value} style={{borderBottom:"1px solid #f1f5f9",background:i%2===0?"#fafafa":"#fff"}}>
+                    <td style={{padding:"12px 18px",fontWeight:700,fontSize:13,color:"#dc2626",wordBreak:"break-all"}}>{b.entity_value}</td>
+                    <td style={{padding:"12px 18px",fontSize:12,color:"#334155",maxWidth:260}}>{b.note||<span style={{color:"#cbd5e1",fontStyle:"italic"}}>—</span>}</td>
+                    <td style={{padding:"12px 18px"}}><span style={{background:"#1e293b",color:"#a5b4fc",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700}}>{b.blocked_by}</span></td>
+                    <td style={{padding:"12px 18px"}}>{b.platform?<span style={{background:"#f0f9ff",color:"#0369a1",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:600}}>{b.platform}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td>
+                    <td style={{padding:"12px 18px",fontSize:11,fontFamily:"monospace",color:"#64748b",whiteSpace:"nowrap"}}>{b.created_at?new Date(b.created_at).toLocaleString():"—"}</td>
+                    <td style={{padding:"12px 18px"}}><button onClick={()=>handleUnblock(b.entity_value)} style={{background:"#f0fdf4",border:"1.5px solid #86efac",color:"#16a34a",padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>🔓 Unblock</button></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+          </div>
+
           {!dashLoading&&dashAlerts.length===0&&(
             <div style={{background:"#fff",borderRadius:16,padding:72,textAlign:"center",color:"#94a3b8",fontSize:14,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
               <div style={{fontSize:44,marginBottom:14}}>📊</div>
@@ -1167,34 +1195,6 @@ export default function App(){
                       <td style={{padding:"12px 18px"}}>
                         <button onClick={()=>openBlockModal(r.email,"dashboard")} style={{background:"#fef2f2",border:"1px solid #fca5a5",color:"#dc2626",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>🚫 Block</button>
                       </td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              )}
-            </div>
-
-            {/* Live blocked accounts */}
-            <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 8px rgba(0,0,0,0.07)",overflow:"hidden",marginBottom:16,border:"1.5px solid #fee2e2"}}>
-              <div style={{padding:"18px 22px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fef2f2"}}>
-                <div>
-                  <div style={{fontWeight:800,fontSize:15,color:"#dc2626"}}>🚫 Blocked Accounts — Live</div>
-                  <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>Updates instantly when you block or unblock from any tab</div>
-                </div>
-                <div style={{background:"#dc2626",color:"#fff",padding:"5px 14px",borderRadius:8,fontSize:13,fontWeight:700}}>{blockedList.length} blocked</div>
-              </div>
-              {blockedList.length===0?(
-                <div style={{padding:32,textAlign:"center",color:"#94a3b8",fontSize:13}}>No blocked accounts yet.</div>
-              ):(
-                <table style={{width:"100%",borderCollapse:"collapse"}}>
-                  <thead><tr style={{background:"#1e293b"}}>{["Email","Reason","Blocked By","Platform","Date","Action"].map(h=><th key={h} style={{padding:"11px 18px",textAlign:"left",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:0.8,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
-                  <tbody>{blockedList.map((b,i)=>(
-                    <tr key={b.entity_value} style={{borderBottom:"1px solid #f1f5f9",background:i%2===0?"#fafafa":"#fff"}}>
-                      <td style={{padding:"12px 18px",fontWeight:700,fontSize:13,color:"#dc2626",wordBreak:"break-all"}}>{b.entity_value}</td>
-                      <td style={{padding:"12px 18px",fontSize:12,color:"#334155",maxWidth:260}}>{b.note||<span style={{color:"#cbd5e1",fontStyle:"italic"}}>—</span>}</td>
-                      <td style={{padding:"12px 18px"}}><span style={{background:"#1e293b",color:"#a5b4fc",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:700}}>{b.blocked_by}</span></td>
-                      <td style={{padding:"12px 18px"}}>{b.platform?<span style={{background:"#f0f9ff",color:"#0369a1",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:600}}>{b.platform}</span>:<span style={{color:"#cbd5e1"}}>—</span>}</td>
-                      <td style={{padding:"12px 18px",fontSize:11,fontFamily:"monospace",color:"#64748b",whiteSpace:"nowrap"}}>{b.created_at?new Date(b.created_at).toLocaleString():"—"}</td>
-                      <td style={{padding:"12px 18px"}}><button onClick={()=>handleUnblock(b.entity_value)} style={{background:"#f0fdf4",border:"1.5px solid #86efac",color:"#16a34a",padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>🔓 Unblock</button></td>
                     </tr>
                   ))}</tbody>
                 </table>
