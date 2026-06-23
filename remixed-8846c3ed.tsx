@@ -4,7 +4,7 @@ import {
   logUploadSession, logFraudAlerts, logAuditEntry,
   buildCCAlerts, buildHighAmtAlerts, buildFakeDomAlerts,
   buildWalletAbuserAlerts, buildBNPLAlerts, buildAdminAlerts, buildFawryAlerts, buildPromoAlerts,
-  loadBlockedEmails, blockEmail, unblockEmail,
+  loadBlockedEmails, blockEmail, unblockEmail, loadDashboardStats,
 } from "./lib/supabase";
 import { Shield, Upload, Search, X, CheckCircle, Eye, AlertTriangle, Users, CreditCard, DollarSign, ShieldAlert, Download } from "lucide-react";
 import Papa from "papaparse";
@@ -533,6 +533,7 @@ const PLATFORM_TABS=[
   {id:"admin",label:"Admin",clr:"#0ea5e9",ready:true},
   {id:"fawry",label:"Fawry",clr:"#f97316",ready:true},
   {id:"promo",label:"Promo Abusers",clr:"#e11d48",ready:true},
+  {id:"dashboard",label:"📊 Dashboard",clr:"#6366f1",ready:true,adminOnly:true},
   {id:"audit",label:"Audit Log",clr:"#10b981",ready:true,adminOnly:true},
   {id:"settings",label:"⚙ Settings",clr:"#64748b",ready:true,adminOnly:true},
 ];
@@ -575,7 +576,11 @@ export default function App(){
   const [blockModal,setBlockModal]=useState(null); // {email, platform}
   const [blockNote,setBlockNote]=useState("");
   const [blockNoteErr,setBlockNoteErr]=useState(false);
-
+  const [dashAlerts,setDashAlerts]=useState([]);
+  const [dashSessions,setDashSessions]=useState([]);
+  const [dashLoading,setDashLoading]=useState(false);
+  const [dashRange,setDashRange]=useState(30);
+  const [dashErr,setDashErr]=useState(null);
 
   // ── Import handlers ──
   const doImportPT=async()=>{await refreshBlocked();const en=ptRows.map(enrichPayTabsRow);const fraud=filterB(detectFraud(en,"CC Details")),high=filterB(detectHighAmounts(en)),fake=filterB(detectFakeDomain(en));setPtRaw(ptRows);setPtEnriched(en);setPtFraud(fraud);setPtHighAmt(high);setPtFakeDom(fake);setPtShowRaw(false);setPtStep("done");const details=`High: ${fraud.filter(r=>r.risk==="High").length} · Mid: ${fraud.filter(r=>r.risk==="Mid").length} · High Amt: ${high.length} · Fake Domain: ${fake.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"PayTabs",records:ptRows.length,details});const sessionId=await logUploadSession({platform:"paytabs",uploaded_by:currentUser.username,record_count:ptRows.length,high_count:fraud.filter(r=>r.risk==="High").length,mid_count:fraud.filter(r=>r.risk==="Mid").length,high_amt_count:high.length,fake_dom_count:fake.length});if(sessionId){await logFraudAlerts(sessionId,[...buildCCAlerts(fraud,"paytabs"),...buildHighAmtAlerts(high,"paytabs"),...buildFakeDomAlerts(fake,"paytabs")]);}await logAuditEntry({username:currentUser.username,action:"Import",platform:"PayTabs",record_count:ptRows.length,details});};
@@ -622,6 +627,16 @@ export default function App(){
     }catch(e){/* Supabase unavailable — localStorage is source of truth */}
   };
   useEffect(()=>{if(currentUser)refreshBlocked();},[currentUser?.username]);
+
+  const loadDash=async(days)=>{
+    setDashLoading(true);setDashErr(null);
+    try{
+      const {alerts,sessions}=await loadDashboardStats(days);
+      setDashAlerts(alerts);setDashSessions(sessions);
+    }catch(e){setDashErr("Could not load dashboard data. Check Supabase RLS settings.");}
+    finally{setDashLoading(false);}
+  };
+  useEffect(()=>{if(tab==="dashboard"&&currentUser)loadDash(dashRange);},[tab,dashRange,currentUser?.username]);
 
   if(!currentUser)return <LoginScreen onLogin={setCurrentUser}/>;
 
@@ -952,6 +967,242 @@ export default function App(){
       </div>}
 
       {/* Audit Log */}
+      {tab==="dashboard"&&currentUser.role==="superadmin"&&(()=>{
+        const PLAT_META={paytabs:{label:"PayTabs",clr:"#7c3aed"},noon:{label:"Noon",clr:"#f59e0b"},paymob_wallets:{label:"PayMob W",clr:"#2563eb"},paymob_bnpl:{label:"BNPL",clr:"#6d28d9"},admin:{label:"Admin",clr:"#0ea5e9"},fawry:{label:"Fawry",clr:"#f97316"},promo:{label:"Promo",clr:"#e11d48"}};
+        const TYPE_META={multi_cc:{label:"Multi CC",clr:"#ef4444"},high_amount:{label:"High Amount",clr:"#f97316"},fake_domain:{label:"Fake Domain",clr:"#8b5cf6"},wallet_abuser:{label:"Wallet Abuser",clr:"#06b6d4"},bnpl_fraud:{label:"BNPL Fraud",clr:"#ec4899"},pay_method_abuse:{label:"Pay Method",clr:"#10b981"},suspected_trials:{label:"Suspected",clr:"#f59e0b"},recharge_abuser:{label:"Recharge",clr:"#6366f1"},fawry_suspected:{label:"Fawry Susp.",clr:"#f97316"},promo_high_discount:{label:"Promo Disc.",clr:"#e11d48"},promo_same_card:{label:"Promo Card",clr:"#dc2626"},promo_same_wallet:{label:"Promo Wallet",clr:"#b91c1c"},promo_fake_domain:{label:"Promo FakeDom",clr:"#991b1b"}};
+
+        // ── Computed ────────────────────────────────────────────────────────────
+        const uniqueEmails=new Set(dashAlerts.map(a=>a.entity_email).filter(Boolean));
+        const totalAmt=dashAlerts.reduce((s,a)=>s+(parseFloat(a.total_amount)||0),0);
+
+        const platCounts={};
+        dashAlerts.forEach(a=>{platCounts[a.platform]=(platCounts[a.platform]||0)+1;});
+        const platArr=Object.entries(platCounts).map(([k,v])=>({key:k,label:PLAT_META[k]?.label||k,clr:PLAT_META[k]?.clr||"#94a3b8",value:v})).sort((a,b)=>b.value-a.value);
+        const maxPlat=Math.max(...platArr.map(p=>p.value),1);
+
+        const typeCounts={};
+        dashAlerts.forEach(a=>{typeCounts[a.alert_type]=(typeCounts[a.alert_type]||0)+1;});
+        const typeArr=Object.entries(typeCounts).map(([k,v])=>({key:k,label:TYPE_META[k]?.label||k,clr:TYPE_META[k]?.clr||"#94a3b8",value:v})).sort((a,b)=>b.value-a.value);
+        const totalTypes=typeArr.reduce((s,t)=>s+t.value,0)||1;
+
+        const DONUT_R=56,DONUT_CIRC=2*Math.PI*DONUT_R;
+        let donutOffset=0;
+        const donutSegs=typeArr.map(t=>{const pct=t.value/totalTypes;const dash=pct*DONUT_CIRC;const seg={...t,dash,gap:DONUT_CIRC-dash,offset:donutOffset};donutOffset+=dash;return seg;});
+
+        const byDate={};
+        dashAlerts.forEach(a=>{const d=(a.created_at||"").split("T")[0]||"unknown";if(d!=="unknown")byDate[d]=(byDate[d]||0)+1;});
+        const sortedDates=Object.keys(byDate).sort();
+        const displayDates=sortedDates.length>60?sortedDates.slice(-60):sortedDates;
+        const maxDay=Math.max(...Object.values(byDate),1);
+
+        const emailMap={};
+        dashAlerts.filter(a=>a.entity_email).forEach(a=>{
+          if(!emailMap[a.entity_email])emailMap[a.entity_email]={platforms:new Set(),count:0,amt:0,types:new Set()};
+          emailMap[a.entity_email].platforms.add(a.platform);
+          emailMap[a.entity_email].count++;
+          emailMap[a.entity_email].amt+=(parseFloat(a.total_amount)||0);
+          emailMap[a.entity_email].types.add(a.alert_type);
+        });
+        const repeatOffenders=Object.entries(emailMap)
+          .filter(([,v])=>v.platforms.size>=2)
+          .map(([email,v])=>({email,platforms:[...v.platforms],count:v.count,amt:v.amt,types:[...v.types],blocked:blockedEmails.has(email)}))
+          .sort((a,b)=>b.platforms.length-a.platforms.length||b.count-a.count)
+          .slice(0,25);
+
+        const downloadReport=()=>{
+          const wb=XLSX.utils.book_new();
+          const summaryRows=Object.entries(emailMap).map(([email,v])=>[email,[...v.platforms].join(", "),v.count,Math.round(v.amt),[...v.types].join(", "),blockedEmails.has(email)?"Yes":"No"]).sort((a,b)=>b[2]-a[2]);
+          XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([["Email","Platforms","Alert Count","Total EGP","Alert Types","Blocked"],...summaryRows]),"All Flagged Emails");
+          const repeatRows=repeatOffenders.map(r=>[r.email,r.platforms.length,r.platforms.join(", "),r.count,Math.round(r.amt),r.blocked?"Yes":"No"]);
+          XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([["Email","# Platforms","Platforms","Alert Count","Total EGP","Blocked"],...repeatRows]),"Cross-Platform Offenders");
+          XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([["Platform","Alert Count"],...platArr.map(p=>[p.label,p.value])]),"By Platform");
+          XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([["Date","Platform","Uploaded By","Records"],...[...dashSessions].reverse().map(s=>[new Date(s.created_at).toLocaleString(),s.platform,s.uploaded_by,s.record_count])]),"Import Sessions");
+          XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([["Date","Platform","Alert Type","Risk","Email","Amount EGP","Tx Count"],...dashAlerts.map(a=>[new Date(a.created_at).toLocaleString(),a.platform,a.alert_type,a.risk_level,a.entity_email||"",parseFloat(a.total_amount)||0,a.transaction_count||0])]),"All Alerts");
+          XLSX.writeFile(wb,`waffarha-report-${dashRange||"all"}d-${new Date().toISOString().split("T")[0]}.xlsx`);
+        };
+
+        return(
+        <div style={{padding:"24px 28px",maxWidth:1300,margin:"0 auto"}}>
+          {/* Header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24,flexWrap:"wrap",gap:12}}>
+            <div>
+              <div style={{fontWeight:800,fontSize:20,color:"#0f172a"}}>📊 Historical Dashboard</div>
+              <div style={{fontSize:13,color:"#64748b",marginTop:3}}>Accumulated fraud data from all import sessions · Supabase powered</div>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              {[{label:"7d",v:7},{label:"30d",v:30},{label:"90d",v:90},{label:"All time",v:null}].map(r=>(
+                <button key={r.label} onClick={()=>setDashRange(r.v)} style={{padding:"7px 14px",background:dashRange===r.v?"#6366f1":"#f1f5f9",color:dashRange===r.v?"#fff":"#475569",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700}}>{r.label}</button>
+              ))}
+              <button onClick={downloadReport} disabled={dashAlerts.length===0} style={{padding:"7px 16px",background:"#16a34a",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:6,opacity:dashAlerts.length===0?0.5:1}}>⬇ Download Excel</button>
+              <button onClick={()=>loadDash(dashRange)} disabled={dashLoading} style={{padding:"7px 14px",background:"#f1f5f9",color:"#475569",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700}}>{dashLoading?"…":"↻ Refresh"}</button>
+            </div>
+          </div>
+
+          {dashLoading&&<div style={{textAlign:"center",padding:72,color:"#6366f1",fontSize:15,fontWeight:700}}>Loading historical data…</div>}
+          {dashErr&&<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:12,padding:"14px 18px",color:"#dc2626",fontSize:13,marginBottom:20}}>⚠ {dashErr}</div>}
+
+          {!dashLoading&&dashAlerts.length===0&&(
+            <div style={{background:"#fff",borderRadius:16,padding:72,textAlign:"center",color:"#94a3b8",fontSize:14,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+              <div style={{fontSize:44,marginBottom:14}}>📊</div>
+              <div style={{fontWeight:700,fontSize:16,color:"#475569",marginBottom:8}}>No historical data yet</div>
+              <div style={{marginBottom:12}}>Import data from any platform — each session is saved automatically to Supabase.</div>
+              <div style={{fontSize:12,color:"#d97706",background:"#fef3c7",padding:"8px 16px",borderRadius:8,display:"inline-block",fontWeight:600}}>⚠ If you've imported data but see nothing, run in Supabase SQL Editor:<br/>ALTER TABLE fraud_alerts DISABLE ROW LEVEL SECURITY;<br/>ALTER TABLE upload_sessions DISABLE ROW LEVEL SECURITY;</div>
+            </div>
+          )}
+
+          {!dashLoading&&dashAlerts.length>0&&<>
+            {/* Stat cards */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:14,marginBottom:20}}>
+              {[
+                {icon:"📧",label:"Unique Emails",value:uniqueEmails.size.toLocaleString(),clr:"#6366f1"},
+                {icon:"🚨",label:"Total Alerts",value:dashAlerts.length.toLocaleString(),clr:"#dc2626"},
+                {icon:"💰",label:"EGP at Risk",value:`${Math.round(totalAmt).toLocaleString()}`,clr:"#f97316"},
+                {icon:"📅",label:"Sessions",value:dashSessions.length.toLocaleString(),clr:"#10b981"},
+                {icon:"🚫",label:"Blocked",value:blockedList.length.toLocaleString(),clr:"#ef4444"},
+              ].map(s=>(
+                <div key={s.label} style={{background:"#fff",borderRadius:14,padding:"18px 20px",boxShadow:"0 2px 8px rgba(0,0,0,0.07)",border:`1.5px solid ${s.clr}25`}}>
+                  <div style={{fontSize:26,marginBottom:8}}>{s.icon}</div>
+                  <div style={{fontWeight:900,fontSize:22,color:s.clr,lineHeight:1}}>{s.value}</div>
+                  <div style={{fontSize:11,color:"#94a3b8",fontWeight:600,marginTop:5}}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Platform bar + Alert type donut */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+              <div style={{background:"#fff",borderRadius:16,padding:"20px 22px",boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
+                <div style={{fontWeight:800,fontSize:15,color:"#0f172a",marginBottom:18}}>Alerts by Platform</div>
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {platArr.map(p=>(
+                    <div key={p.key}>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:5}}>
+                        <span style={{fontWeight:700,color:"#334155"}}>{p.label}</span>
+                        <span style={{fontWeight:800,color:p.clr}}>{p.value}</span>
+                      </div>
+                      <div style={{height:10,background:"#f1f5f9",borderRadius:6,overflow:"hidden"}}>
+                        <div style={{height:"100%",width:`${(p.value/maxPlat)*100}%`,background:p.clr,borderRadius:6}}/>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{background:"#fff",borderRadius:16,padding:"20px 22px",boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
+                <div style={{fontWeight:800,fontSize:15,color:"#0f172a",marginBottom:18}}>Alert Type Breakdown</div>
+                <div style={{display:"flex",alignItems:"center",gap:20}}>
+                  <div style={{flexShrink:0}}>
+                    <svg width={140} height={140} viewBox="0 0 140 140">
+                      {donutSegs.map((seg,i)=>(
+                        <circle key={i} cx={70} cy={70} r={DONUT_R} fill="none" stroke={seg.clr} strokeWidth={24}
+                          strokeDasharray={`${seg.dash} ${seg.gap}`} strokeDashoffset={-(seg.offset)}
+                          transform="rotate(-90 70 70)" style={{opacity:0.9}}/>
+                      ))}
+                      <text x={70} y={65} textAnchor="middle" style={{fontSize:18,fontWeight:"900",fill:"#0f172a"}}>{dashAlerts.length}</text>
+                      <text x={70} y={82} textAnchor="middle" style={{fontSize:10,fill:"#94a3b8"}}>total alerts</text>
+                    </svg>
+                  </div>
+                  <div style={{flex:1,display:"flex",flexDirection:"column",gap:7,overflowY:"auto",maxHeight:160}}>
+                    {typeArr.slice(0,9).map(t=>(
+                      <div key={t.key} style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{width:10,height:10,borderRadius:"50%",background:t.clr,flexShrink:0}}/>
+                        <span style={{fontSize:11,color:"#475569",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</span>
+                        <span style={{fontSize:12,fontWeight:700,color:t.clr}}>{t.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Daily trend */}
+            <div style={{background:"#fff",borderRadius:16,padding:"20px 22px",boxShadow:"0 2px 8px rgba(0,0,0,0.07)",marginBottom:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+                <div style={{fontWeight:800,fontSize:15,color:"#0f172a"}}>Daily Alert Trend</div>
+                <div style={{fontSize:12,color:"#94a3b8"}}>{displayDates.length} days</div>
+              </div>
+              {displayDates.length===0?(
+                <div style={{color:"#94a3b8",fontSize:13,padding:"20px 0",textAlign:"center"}}>No data</div>
+              ):(
+                <div>
+                  <div style={{display:"flex",alignItems:"flex-end",gap:displayDates.length>30?1:3,height:130}}>
+                    {displayDates.map(d=>(
+                      <div key={d} title={`${d}: ${byDate[d]} alerts`} style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"stretch"}}>
+                        <div style={{background:"#6366f1",borderRadius:"2px 2px 0 0",minHeight:byDate[d]>0?3:0,height:`${(byDate[d]/maxDay)*100}%`,opacity:0.8}}/>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>
+                    <span>{displayDates[0]}</span>
+                    {displayDates.length>4&&<span>{displayDates[Math.floor(displayDates.length/2)]}</span>}
+                    <span>{displayDates[displayDates.length-1]}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Cross-platform repeat offenders */}
+            <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 8px rgba(0,0,0,0.07)",overflow:"hidden",marginBottom:16}}>
+              <div style={{padding:"18px 22px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontWeight:800,fontSize:15,color:"#0f172a"}}>Cross-Platform Repeat Offenders</div>
+                  <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>Emails flagged on 2+ platforms — highest priority threats</div>
+                </div>
+                <div style={{background:"#fef2f2",color:"#dc2626",padding:"5px 14px",borderRadius:8,fontSize:13,fontWeight:700,flexShrink:0}}>{repeatOffenders.length} found</div>
+              </div>
+              {repeatOffenders.length===0?(
+                <div style={{padding:40,textAlign:"center",color:"#94a3b8",fontSize:13}}>No cross-platform offenders in this period.</div>
+              ):(
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead><tr style={{background:"#1e293b"}}>{["Email","Platforms","Alerts","EGP at Risk","Status"].map(h=><th key={h} style={{padding:"11px 18px",textAlign:"left",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:0.8,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                  <tbody>{repeatOffenders.map((r,i)=>(
+                    <tr key={r.email} style={{borderBottom:"1px solid #f1f5f9",background:i%2===0?"#fafafa":"#fff"}}>
+                      <td style={{padding:"12px 18px",fontWeight:700,fontSize:13,color:"#0f172a",wordBreak:"break-all"}}>{r.email}</td>
+                      <td style={{padding:"12px 18px"}}>
+                        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                          {r.platforms.map(p=><span key={p} style={{background:(PLAT_META[p]?.clr||"#94a3b8")+"20",color:PLAT_META[p]?.clr||"#94a3b8",padding:"2px 8px",borderRadius:5,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{PLAT_META[p]?.label||p}</span>)}
+                        </div>
+                      </td>
+                      <td style={{padding:"12px 18px",fontWeight:800,color:"#dc2626",fontSize:14}}>{r.count}</td>
+                      <td style={{padding:"12px 18px",fontWeight:700,color:"#f97316"}}>EGP {Math.round(r.amt).toLocaleString()}</td>
+                      <td style={{padding:"12px 18px"}}>
+                        {r.blocked
+                          ?<span style={{background:"#fee2e2",color:"#dc2626",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:700}}>🚫 Blocked</span>
+                          :<button onClick={()=>openBlockModal(r.email,"dashboard")} style={{background:"#fef2f2",border:"1px solid #fca5a5",color:"#dc2626",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>Block</button>}
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Import session history */}
+            <div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 8px rgba(0,0,0,0.07)",overflow:"hidden"}}>
+              <div style={{padding:"18px 22px",borderBottom:"1px solid #f1f5f9"}}>
+                <div style={{fontWeight:800,fontSize:15,color:"#0f172a"}}>Import Session History</div>
+                <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>{dashSessions.length} sessions in selected period</div>
+              </div>
+              {dashSessions.length===0?(
+                <div style={{padding:40,textAlign:"center",color:"#94a3b8",fontSize:13}}>No sessions in this period.</div>
+              ):(
+                <div style={{maxHeight:320,overflowY:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse"}}>
+                    <thead><tr style={{background:"#1e293b",position:"sticky",top:0}}>{["Date & Time","Platform","Uploaded By","Records"].map(h=><th key={h} style={{padding:"11px 18px",textAlign:"left",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:0.8,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                    <tbody>{[...dashSessions].reverse().map((s,i)=>(
+                      <tr key={s.id} style={{borderBottom:"1px solid #f1f5f9",background:i%2===0?"#fafafa":"#fff"}}>
+                        <td style={{padding:"11px 18px",fontSize:12,fontFamily:"monospace",color:"#64748b",whiteSpace:"nowrap"}}>{new Date(s.created_at).toLocaleString()}</td>
+                        <td style={{padding:"11px 18px"}}><span style={{background:(PLAT_META[s.platform]?.clr||"#94a3b8")+"20",color:PLAT_META[s.platform]?.clr||"#94a3b8",padding:"3px 10px",borderRadius:6,fontSize:12,fontWeight:700}}>{PLAT_META[s.platform]?.label||s.platform}</span></td>
+                        <td style={{padding:"11px 18px",fontSize:12,fontWeight:600,color:"#334155"}}>{s.uploaded_by}</td>
+                        <td style={{padding:"11px 18px",fontSize:13,fontWeight:700,color:"#0f172a"}}>{(s.record_count||0).toLocaleString()}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>}
+        </div>);
+      })()}
+
       {tab==="audit"&&currentUser.role==="superadmin"&&(()=>{
         const logs=getAuditLog();
         const downloadAudit=()=>{const wb=XLSX.utils.book_new();const data=logs.map(l=>({"Time":l.time,"User":l.user,"Action":l.action,"Platform":l.platform,"Records":l.records||"","Details":l.details||""}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);ws["!cols"]=[22,18,12,14,10,60].map(wch=>({wch}));XLSX.utils.book_append_sheet(wb,ws,"Audit Log");XLSX.writeFile(wb,`Audit_Log_${new Date().toISOString().split("T")[0]}.xlsx`);};

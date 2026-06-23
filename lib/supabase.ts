@@ -213,6 +213,29 @@ export async function unblockEmail(email: string): Promise<boolean> {
   return true;
 }
 
+export async function loadDashboardStats(days: number | null): Promise<{
+  alerts: any[];
+  sessions: any[];
+}> {
+  let aq = supabase
+    .from("fraud_alerts")
+    .select("id,platform,alert_type,risk_level,entity_email,total_amount,transaction_count,created_at")
+    .order("created_at", { ascending: true });
+  let sq = supabase
+    .from("upload_sessions")
+    .select("id,platform,uploaded_by,record_count,high_count,mid_count,created_at")
+    .order("created_at", { ascending: true });
+  if (days) {
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    aq = aq.gte("created_at", since);
+    sq = sq.gte("created_at", since);
+  }
+  const [ar, sr] = await Promise.all([aq, sq]);
+  if (ar.error) console.error("[Supabase] dashboard alerts:", ar.error.message);
+  if (sr.error) console.error("[Supabase] dashboard sessions:", sr.error.message);
+  return { alerts: ar.data ?? [], sessions: sr.data ?? [] };
+}
+
 export function buildCCAlerts(
   fraud: any[],
   platform: Platform
