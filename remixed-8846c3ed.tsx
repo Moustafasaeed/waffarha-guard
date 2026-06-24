@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
-  logUploadSession, logFraudAlerts, logAuditEntry,
+  logUploadSession, logFraudAlerts, logAuditEntry, logAllTransactions,
   buildCCAlerts, buildHighAmtAlerts, buildFakeDomAlerts,
   buildWalletAbuserAlerts, buildBNPLAlerts, buildAdminAlerts, buildFawryAlerts, buildPromoAlerts,
   loadBlockedEmails, blockEmail, unblockEmail, loadDashboardStats,
@@ -90,6 +90,76 @@ function detectPromoHighDiscount(enriched,threshold=200){const byEmail={};enrich
 function detectPromoSameCard(enriched){const byCard={};enriched.forEach(r=>{const card=r._cardNum;if(!card||card==="n/a"||card==="-"||!card.toString().trim())return;if(!r._promoCode)return;if(!byCard[card])byCard[card]={emails:new Set(),rows:[]};if(r._email&&r._email!=="n/a")byCard[card].emails.add(r._email);byCard[card].rows.push(r);});const results=[];Object.entries(byCard).forEach(([card,{emails,rows}])=>{const n=emails.size;if(n<2)return;const totalDiscount=rows.reduce((s,r)=>s+r._discountAmt,0),emailList=[...emails],risk=n>=3?"High":"Mid";const byEmail={};rows.forEach(r=>{if(!r._email)return;if(!byEmail[r._email])byEmail[r._email]={txRows:[],discount:0};byEmail[r._email].txRows.push({orderId:r._orderId,promoCode:r._promoCode,trxFlag:r._trxFlag||"",discountAmt:r._discountAmt,orderStatus:r._orderStatus,createdAt:r._createdAt});byEmail[r._email].discount+=r._discountAmt;});results.push({card,emails:emailList,emailDetails:byEmail,totalDiscount,txCount:rows.length,risk,reasons:[`Card used by ${n} different account${n>1?"s":""} to claim promos: ${emailList.join(", ")}`]});});return results.sort((a,b)=>b.emails.length-a.emails.length||b.totalDiscount-a.totalDiscount);}
 function detectPromoSameWallet(enriched){const byWallet={};enriched.forEach(r=>{const wallet=r._walletNum;if(!wallet||wallet==="n/a"||wallet==="-"||!wallet.toString().trim())return;if(!r._promoCode)return;if(!byWallet[wallet])byWallet[wallet]={emails:new Set(),rows:[]};if(r._email&&r._email!=="n/a")byWallet[wallet].emails.add(r._email);byWallet[wallet].rows.push(r);});const results=[];Object.entries(byWallet).forEach(([wallet,{emails,rows}])=>{const n=emails.size;if(n<2)return;const totalDiscount=rows.reduce((s,r)=>s+r._discountAmt,0),emailList=[...emails],risk=n>=3?"High":"Mid";const byEmail={};rows.forEach(r=>{if(!r._email)return;if(!byEmail[r._email])byEmail[r._email]={txRows:[],discount:0};byEmail[r._email].txRows.push({orderId:r._orderId,promoCode:r._promoCode,trxFlag:r._trxFlag||"",discountAmt:r._discountAmt,orderStatus:r._orderStatus,createdAt:r._createdAt});byEmail[r._email].discount+=r._discountAmt;});results.push({wallet,emails:emailList,emailDetails:byEmail,totalDiscount,txCount:rows.length,risk,reasons:[`Wallet used by ${n} different account${n>1?"s":""} to claim promos: ${emailList.join(", ")}`]});});return results.sort((a,b)=>b.emails.length-a.emails.length||b.totalDiscount-a.totalDiscount);}
 function detectPromoFakeDomain(enriched){const byEmail={};enriched.forEach(r=>{if(!r._email||!isDisposable(r._email))return;if(!r._promoCode)return;if(!byEmail[r._email])byEmail[r._email]={rows:[],names:new Set(),codes:new Set()};byEmail[r._email].rows.push(r);if(r._name)byEmail[r._email].names.add(r._name);if(r._promoCode)byEmail[r._email].codes.add(r._promoCode);});const results=[];Object.entries(byEmail).forEach(([email,{rows,names,codes}])=>{const totalDiscount=rows.reduce((s,r)=>s+r._discountAmt,0),domain=email.split("@")[1]||"";results.push({email,custNames:[...names],promoCodes:[...codes],domain,totalDiscount,txCount:rows.length,txRows:rows.map(r=>({orderId:r._orderId,promoCode:r._promoCode,trxFlag:r._trxFlag||"",discountAmt:r._discountAmt,orderStatus:r._orderStatus,total:r._total,createdAt:r._createdAt})),reasons:[`Non-whitelisted email domain: @${domain}`]});});return results.sort((a,b)=>b.totalDiscount-a.totalDiscount);}
+
+// ─── All-data aggregate stats (Option A) ─────────────────────────────────────
+function computeAllStats(enriched,amtKey="_amt"){
+  const amounts=enriched.map(r=>r[amtKey]||0).filter(a=>a>0).sort((a,b)=>a-b);
+  const emails=enriched.map(r=>r._email||"").filter(Boolean);
+  const uniqueEmails=new Set(emails);
+  const domains={};
+  emails.forEach(e=>{const d=e.split("@")[1]||"unknown";domains[d]=(domains[d]||0)+1;});
+  const topDomains=Object.entries(domains).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([d,c])=>`${d}(${c})`);
+  const pct=(arr,p)=>arr.length?arr[Math.floor((arr.length-1)*p/100)]:0;
+  return{totalRecords:enriched.length,uniqueEmails:uniqueEmails.size,totalAmount:Math.round(amounts.reduce((s,a)=>s+a,0)),amountP50:Math.round(pct(amounts,50)),amountP90:Math.round(pct(amounts,90)),amountP99:Math.round(pct(amounts,99)),maxAmount:amounts.length?amounts[amounts.length-1]:0,topDomains,zeroAmountCount:enriched.filter(r=>!r[amtKey]||r[amtKey]===0).length};
+}
+
+// ─── Claude Analysis Panel ─────────────────────────────────────────────────────
+function ClaudeAnalysisPanel({result,meta,onClose}){
+  const riskColors={low:"#16a34a",medium:"#d97706",high:"#dc2626",critical:"#7c3aed"};
+  const riskColor=riskColors[result.risk_level]||"#64748b";
+  const actionColors={block:"#dc2626",escalate:"#d97706",monitor:"#2563eb",report_to_processor:"#7c3aed"};
+  return(<div style={{background:"#0f172a",borderRadius:16,padding:"20px 24px",marginBottom:24,border:`1px solid ${riskColor}44`}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <span style={{fontSize:18}}>🤖</span>
+        <span style={{fontWeight:800,fontSize:15,color:"#f8fafc"}}>Claude AI Analysis</span>
+        <span style={{background:riskColor,color:"#fff",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,textTransform:"uppercase"}}>{result.risk_level}</span>
+      </div>
+      <div style={{display:"flex",gap:12,alignItems:"center"}}>
+        {meta&&<span style={{fontSize:11,color:"#64748b"}}>{meta.emailsChecked} checked · {meta.historicalHits} hist. hits · {meta.crossPlatformCount} cross-platform</span>}
+        <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"#64748b",fontSize:16}}>✕</button>
+      </div>
+    </div>
+    <div style={{background:"#1e293b",borderRadius:10,padding:"12px 16px",marginBottom:14,borderLeft:`3px solid ${riskColor}`}}>
+      <div style={{fontSize:11,color:"#94a3b8",fontWeight:600,marginBottom:5,textTransform:"uppercase"}}>Executive Summary</div>
+      <div style={{fontSize:13,color:"#e2e8f0",lineHeight:1.6}}>{result.executive_summary}</div>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+      {result.key_patterns?.length>0&&(<div style={{background:"#1e293b",borderRadius:10,padding:"12px 16px"}}>
+        <div style={{fontSize:11,color:"#94a3b8",fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Key Patterns</div>
+        {result.key_patterns.map((p,i)=><div key={i} style={{fontSize:12,color:"#cbd5e1",marginBottom:5,paddingLeft:8,borderLeft:"2px solid #334155"}}>• {p}</div>)}
+      </div>)}
+      {result.priority_actions?.length>0&&(<div style={{background:"#1e293b",borderRadius:10,padding:"12px 16px"}}>
+        <div style={{fontSize:11,color:"#94a3b8",fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Priority Actions</div>
+        {result.priority_actions.slice(0,6).map((a,i)=>{const ac=actionColors[a.action]||"#64748b";return(<div key={i} style={{marginBottom:7}}><span style={{background:ac+"22",color:ac,fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:10,marginRight:6,textTransform:"uppercase"}}>{a.action}</span><span style={{fontSize:12,color:"#94a3b8"}}>{a.target}</span><div style={{fontSize:11,color:"#64748b",paddingLeft:14,marginTop:2}}>{a.reason}</div></div>);})}
+      </div>)}
+    </div>
+    {(result.repeat_offenders?.length>0||result.cross_platform_activity?.length>0)&&(
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        {result.repeat_offenders?.length>0&&(<div style={{background:"#1e293b",borderRadius:10,padding:"12px 16px"}}>
+          <div style={{fontSize:11,color:"#dc2626",fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Repeat Offenders</div>
+          {result.repeat_offenders.map((r,i)=><div key={i} style={{fontSize:12,color:"#cbd5e1",marginBottom:4}}>• {r}</div>)}
+        </div>)}
+        {result.cross_platform_activity?.length>0&&(<div style={{background:"#1e293b",borderRadius:10,padding:"12px 16px"}}>
+          <div style={{fontSize:11,color:"#d97706",fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Cross-Platform Activity</div>
+          {result.cross_platform_activity.map((r,i)=><div key={i} style={{fontSize:12,color:"#cbd5e1",marginBottom:4}}>• {r}</div>)}
+        </div>)}
+      </div>
+    )}
+    {(result.predicted_next_moves?.length>0||result.recommendations?.length>0)&&(
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        {result.predicted_next_moves?.length>0&&(<div style={{background:"#1e293b",borderRadius:10,padding:"12px 16px"}}>
+          <div style={{fontSize:11,color:"#7c3aed",fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Predicted Next Moves</div>
+          {result.predicted_next_moves.map((m,i)=><div key={i} style={{fontSize:12,color:"#cbd5e1",marginBottom:4}}>• {m}</div>)}
+        </div>)}
+        {result.recommendations?.length>0&&(<div style={{background:"#1e293b",borderRadius:10,padding:"12px 16px"}}>
+          <div style={{fontSize:11,color:"#16a34a",fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Recommendations</div>
+          {result.recommendations.map((r,i)=><div key={i} style={{fontSize:12,color:"#cbd5e1",marginBottom:4}}>• {r}</div>)}
+        </div>)}
+      </div>
+    )}
+  </div>);
+}
 
 // ─── File parsing ─────────────────────────────────────────────────────────────
 async function parseFile(file){const ext=file.name.split(".").pop().toLowerCase();return new Promise((res,rej)=>{const rdr=new FileReader();if(ext==="csv"){rdr.onload=e=>{const p=Papa.parse(e.target.result,{header:true,skipEmptyLines:true,transformHeader:h=>h.trim()});res(p.data);};rdr.onerror=()=>rej(new Error("Cannot read CSV"));rdr.readAsText(file);}else if(["xlsx","xls"].includes(ext)){rdr.onload=e=>{try{const wb=XLSX.read(e.target.result,{type:"array"});res(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""}));}catch(e){rej(e);}};rdr.onerror=()=>rej(new Error("Cannot read Excel"));rdr.readAsArrayBuffer(file);}else rej(new Error("Use .csv, .xlsx or .xls"));});}
@@ -304,9 +374,20 @@ function WalletAbuserCard({r,accent}){
 
 // ─── Universal Dashboard ──────────────────────────────────────────────────────
 function UniversalDashboard({config}){
-  const{accent,reimportLabel,raw,enriched,tabs,stats,onReimport,showRaw,setShowRaw,previewCols,previewKeyFn,onDownload,onBlock,isBlocked,blockingEmail}=config;
+  const{accent,reimportLabel,raw,enriched,tabs,stats,onReimport,showRaw,setShowRaw,previewCols,previewKeyFn,onDownload,onBlock,isBlocked,blockingEmail,analysisPayload}=config;
   const [activeTab,setActiveTab]=useState(tabs[0].id);
   const [search,setSearch]=useState("");
+  const [claude,setClaude]=useState({loading:false,result:null,meta:null,error:""});
+  const runClaude=async()=>{
+    if(!analysisPayload)return;
+    setClaude({loading:true,result:null,meta:null,error:""});
+    try{
+      const res=await fetch("/api/analyze-fraud",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(analysisPayload)});
+      const data=await res.json();
+      if(!res.ok)throw new Error(data.error||"API error");
+      setClaude({loading:false,result:data.analysis,meta:data.meta,error:""});
+    }catch(e){setClaude({loading:false,result:null,meta:null,error:e.message});}
+  };
 
   const activeTabCfg=tabs.find(t=>t.id===activeTab)||tabs[0];
   const baseRows=activeTabCfg.rows||[];
@@ -318,8 +399,15 @@ function UniversalDashboard({config}){
     {/* Header */}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
       <div><div style={{fontWeight:800,fontSize:18,color:"#0f172a"}}>{reimportLabel} Fraud Report</div><div style={{fontSize:13,color:"#64748b",marginTop:3}}>{raw.length.toLocaleString()} records · {uniqueEmails.toLocaleString()} unique customers</div></div>
-      <button onClick={onReimport} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",background:accent,color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600}}><Upload size={13}/> Re-import</button>
+      <div style={{display:"flex",gap:8}}>
+        {analysisPayload&&<button onClick={runClaude} disabled={claude.loading} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",background:claude.loading?"#334155":"#1e293b",color:claude.loading?"#64748b":"#f8fafc",border:"1px solid #334155",borderRadius:8,cursor:claude.loading?"not-allowed":"pointer",fontSize:13,fontWeight:600}}>{claude.loading?"⏳ Analyzing…":"🤖 AI Analysis"}</button>}
+        <button onClick={onReimport} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",background:accent,color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600}}><Upload size={13}/> Re-import</button>
+      </div>
     </div>
+
+    {/* Claude Analysis Panel */}
+    {claude.error&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#dc2626"}}>⚠ Claude Error: {claude.error}</div>}
+    {claude.result&&<ClaudeAnalysisPanel result={claude.result} meta={claude.meta} onClose={()=>setClaude({loading:false,result:null,meta:null,error:""})}/>}
 
     {/* Stats */}
     <div style={{display:"grid",gridTemplateColumns:`repeat(${stats.length},1fr)`,gap:14,marginBottom:24}}>
@@ -583,17 +671,17 @@ export default function App(){
   const [dashErr,setDashErr]=useState(null);
 
   // ── Import handlers ──
-  const doImportPT=async()=>{await refreshBlocked();const en=ptRows.map(enrichPayTabsRow);const fraud=filterB(detectFraud(en,"CC Details")),high=filterB(detectHighAmounts(en)),fake=filterB(detectFakeDomain(en));setPtRaw(ptRows);setPtEnriched(en);setPtFraud(fraud);setPtHighAmt(high);setPtFakeDom(fake);setPtShowRaw(false);setPtStep("done");const details=`High: ${fraud.filter(r=>r.risk==="High").length} · Mid: ${fraud.filter(r=>r.risk==="Mid").length} · High Amt: ${high.length} · Fake Domain: ${fake.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"PayTabs",records:ptRows.length,details});const sessionId=await logUploadSession({platform:"paytabs",uploaded_by:currentUser.username,record_count:ptRows.length,high_count:fraud.filter(r=>r.risk==="High").length,mid_count:fraud.filter(r=>r.risk==="Mid").length,high_amt_count:high.length,fake_dom_count:fake.length});if(sessionId){await logFraudAlerts(sessionId,[...buildCCAlerts(fraud,"paytabs"),...buildHighAmtAlerts(high,"paytabs"),...buildFakeDomAlerts(fake,"paytabs")]);}await logAuditEntry({username:currentUser.username,action:"Import",platform:"PayTabs",record_count:ptRows.length,details});};
-  const doImportPM=async()=>{await refreshBlocked();const wEn=pmRows.map(enrichPaymobRow);const bRows=filterBNPLRows(pmRows);const bEn=bRows.map(enrichBNPLRow);const wFraud=filterB(detectFraud(wEn,"wallets")),wHigh=filterB(detectHighAmounts(wEn)),wFake=filterB(detectFakeDomain(wEn)),wAbusers=detectWalletAbusers(wEn);const bFraud=filterB(detectBNPLFraud(bEn)),bHigh=filterB(detectHighAmounts(bEn));setPmRaw(pmRows);setPmWEnriched(wEn);setPmWFraud(wFraud);setPmWHighAmt(wHigh);setPmWFakeDom(wFake);setPmWalletAbusers(wAbusers);setPmBEnriched(bEn);setPmBFraud(bFraud);setPmBHighAmt(bHigh);setPmWShowRaw(false);setPmBShowRaw(false);setPmSubTab("wallets");setPmStep("done");const details=`W High: ${wFraud.filter(r=>r.risk==="High").length} Mid: ${wFraud.filter(r=>r.risk==="Mid").length} Abusers: ${wAbusers.length} | BNPL: Susp: ${bFraud.length} HighAmt: ${bHigh.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"PayMob",records:pmRows.length,details});const wSessionId=await logUploadSession({platform:"paymob_wallets",uploaded_by:currentUser.username,record_count:pmRows.length,high_count:wFraud.filter(r=>r.risk==="High").length,mid_count:wFraud.filter(r=>r.risk==="Mid").length,high_amt_count:wHigh.length,fake_dom_count:wFake.length,other_count:wAbusers.length});if(wSessionId){await logFraudAlerts(wSessionId,[...buildCCAlerts(wFraud,"paymob_wallets"),...buildHighAmtAlerts(wHigh,"paymob_wallets"),...buildFakeDomAlerts(wFake,"paymob_wallets"),...buildWalletAbuserAlerts(wAbusers,"paymob_wallets")]);}const bSessionId=await logUploadSession({platform:"paymob_bnpl",uploaded_by:currentUser.username,record_count:bEn.length,high_count:bFraud.length,mid_count:0,high_amt_count:bHigh.length,fake_dom_count:0});if(bSessionId){await logFraudAlerts(bSessionId,[...buildBNPLAlerts(bFraud,"paymob_bnpl"),...buildHighAmtAlerts(bHigh,"paymob_bnpl")]);}await logAuditEntry({username:currentUser.username,action:"Import",platform:"PayMob",record_count:pmRows.length,details});};
-  const doImportAdmin=async()=>{await refreshBlocked();const filtered=adminRows.filter(r=>(getCol(r)("User Name")||"").toLowerCase().trim()!=="integration");const en=filtered.map(enrichAdminRow);const payM=filterB(detectAdminPayMethods(en)),susp=filterB(detectAdminSuspected(en)),high=filterB(detectAdminHighAmt(en)),fake=filterB(detectAdminFakeDomain(en)),recharge=detectRechargeAbusers(en);setAdminSheetRaw(filtered);setAdminEnriched(en);setAdminPayMethods(payM);setAdminSuspected(susp);setAdminHighAmt(high);setAdminFakeDom(fake);setAdminRechargeAbusers(recharge);setAdminShowRaw(false);setAdminStep("done");const details=`PayMethod: ${payM.length} · Suspected: ${susp.length} · High Amt: ${high.length} · Fake: ${fake.length} · Recharge: ${recharge.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"Admin",records:filtered.length,details});const sessionId=await logUploadSession({platform:"admin",uploaded_by:currentUser.username,record_count:filtered.length,high_count:payM.filter(r=>r.risk==="High").length,mid_count:payM.filter(r=>r.risk==="Mid").length,high_amt_count:high.length,fake_dom_count:fake.length,other_count:susp.length+recharge.length});if(sessionId){await logFraudAlerts(sessionId,buildAdminAlerts(payM,susp,high,fake,recharge));}await logAuditEntry({username:currentUser.username,action:"Import",platform:"Admin",record_count:filtered.length,details});};
-  const doImportFawry=async()=>{await refreshBlocked();const en=fawryRows.map(enrichFawryRow);const high=filterB(detectFawryHighAmt(en)),susp=filterB(detectFawrySuspected(en)),fake=filterB(detectFawryFakeDomain(en));setFawryRaw(fawryRows);setFawryEnriched(en);setFawryHighAmt(high);setFawrySuspected(susp);setFawryFakeDom(fake);setFawryShowRaw(false);setFawryStep("done");const details=`Suspected: ${susp.length} · High Amt: ${high.length} · Fake Domain: ${fake.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"Fawry",records:fawryRows.length,details});const sessionId=await logUploadSession({platform:"fawry",uploaded_by:currentUser.username,record_count:fawryRows.length,high_count:high.length,mid_count:0,high_amt_count:high.length,fake_dom_count:fake.length,other_count:susp.length});if(sessionId){await logFraudAlerts(sessionId,buildFawryAlerts(high,susp,fake));}await logAuditEntry({username:currentUser.username,action:"Import",platform:"Fawry",record_count:fawryRows.length,details});};
+  const doImportPT=async()=>{await refreshBlocked();const en=ptRows.map(enrichPayTabsRow);const fraud=filterB(detectFraud(en,"CC Details")),high=filterB(detectHighAmounts(en)),fake=filterB(detectFakeDomain(en));setPtRaw(ptRows);setPtEnriched(en);setPtFraud(fraud);setPtHighAmt(high);setPtFakeDom(fake);setPtShowRaw(false);setPtStep("done");const details=`High: ${fraud.filter(r=>r.risk==="High").length} · Mid: ${fraud.filter(r=>r.risk==="Mid").length} · High Amt: ${high.length} · Fake Domain: ${fake.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"PayTabs",records:ptRows.length,details});const sessionId=await logUploadSession({platform:"paytabs",uploaded_by:currentUser.username,record_count:ptRows.length,high_count:fraud.filter(r=>r.risk==="High").length,mid_count:fraud.filter(r=>r.risk==="Mid").length,high_amt_count:high.length,fake_dom_count:fake.length});if(sessionId){await logFraudAlerts(sessionId,[...buildCCAlerts(fraud,"paytabs"),...buildHighAmtAlerts(high,"paytabs"),...buildFakeDomAlerts(fake,"paytabs")]);await logAllTransactions(sessionId,en,"paytabs");}await logAuditEntry({username:currentUser.username,action:"Import",platform:"PayTabs",record_count:ptRows.length,details});};
+  const doImportPM=async()=>{await refreshBlocked();const wEn=pmRows.map(enrichPaymobRow);const bRows=filterBNPLRows(pmRows);const bEn=bRows.map(enrichBNPLRow);const wFraud=filterB(detectFraud(wEn,"wallets")),wHigh=filterB(detectHighAmounts(wEn)),wFake=filterB(detectFakeDomain(wEn)),wAbusers=detectWalletAbusers(wEn);const bFraud=filterB(detectBNPLFraud(bEn)),bHigh=filterB(detectHighAmounts(bEn));setPmRaw(pmRows);setPmWEnriched(wEn);setPmWFraud(wFraud);setPmWHighAmt(wHigh);setPmWFakeDom(wFake);setPmWalletAbusers(wAbusers);setPmBEnriched(bEn);setPmBFraud(bFraud);setPmBHighAmt(bHigh);setPmWShowRaw(false);setPmBShowRaw(false);setPmSubTab("wallets");setPmStep("done");const details=`W High: ${wFraud.filter(r=>r.risk==="High").length} Mid: ${wFraud.filter(r=>r.risk==="Mid").length} Abusers: ${wAbusers.length} | BNPL: Susp: ${bFraud.length} HighAmt: ${bHigh.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"PayMob",records:pmRows.length,details});const wSessionId=await logUploadSession({platform:"paymob_wallets",uploaded_by:currentUser.username,record_count:pmRows.length,high_count:wFraud.filter(r=>r.risk==="High").length,mid_count:wFraud.filter(r=>r.risk==="Mid").length,high_amt_count:wHigh.length,fake_dom_count:wFake.length,other_count:wAbusers.length});if(wSessionId){await logFraudAlerts(wSessionId,[...buildCCAlerts(wFraud,"paymob_wallets"),...buildHighAmtAlerts(wHigh,"paymob_wallets"),...buildFakeDomAlerts(wFake,"paymob_wallets"),...buildWalletAbuserAlerts(wAbusers,"paymob_wallets")]);await logAllTransactions(wSessionId,wEn,"paymob_wallets");}const bSessionId=await logUploadSession({platform:"paymob_bnpl",uploaded_by:currentUser.username,record_count:bEn.length,high_count:bFraud.length,mid_count:0,high_amt_count:bHigh.length,fake_dom_count:0});if(bSessionId){await logFraudAlerts(bSessionId,[...buildBNPLAlerts(bFraud,"paymob_bnpl"),...buildHighAmtAlerts(bHigh,"paymob_bnpl")]);await logAllTransactions(bSessionId,bEn,"paymob_bnpl");}await logAuditEntry({username:currentUser.username,action:"Import",platform:"PayMob",record_count:pmRows.length,details});};
+  const doImportAdmin=async()=>{await refreshBlocked();const filtered=adminRows.filter(r=>(getCol(r)("User Name")||"").toLowerCase().trim()!=="integration");const en=filtered.map(enrichAdminRow);const payM=filterB(detectAdminPayMethods(en)),susp=filterB(detectAdminSuspected(en)),high=filterB(detectAdminHighAmt(en)),fake=filterB(detectAdminFakeDomain(en)),recharge=detectRechargeAbusers(en);setAdminSheetRaw(filtered);setAdminEnriched(en);setAdminPayMethods(payM);setAdminSuspected(susp);setAdminHighAmt(high);setAdminFakeDom(fake);setAdminRechargeAbusers(recharge);setAdminShowRaw(false);setAdminStep("done");const details=`PayMethod: ${payM.length} · Suspected: ${susp.length} · High Amt: ${high.length} · Fake: ${fake.length} · Recharge: ${recharge.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"Admin",records:filtered.length,details});const sessionId=await logUploadSession({platform:"admin",uploaded_by:currentUser.username,record_count:filtered.length,high_count:payM.filter(r=>r.risk==="High").length,mid_count:payM.filter(r=>r.risk==="Mid").length,high_amt_count:high.length,fake_dom_count:fake.length,other_count:susp.length+recharge.length});if(sessionId){await logFraudAlerts(sessionId,buildAdminAlerts(payM,susp,high,fake,recharge));await logAllTransactions(sessionId,en,"admin");}await logAuditEntry({username:currentUser.username,action:"Import",platform:"Admin",record_count:filtered.length,details});};
+  const doImportFawry=async()=>{await refreshBlocked();const en=fawryRows.map(enrichFawryRow);const high=filterB(detectFawryHighAmt(en)),susp=filterB(detectFawrySuspected(en)),fake=filterB(detectFawryFakeDomain(en));setFawryRaw(fawryRows);setFawryEnriched(en);setFawryHighAmt(high);setFawrySuspected(susp);setFawryFakeDom(fake);setFawryShowRaw(false);setFawryStep("done");const details=`Suspected: ${susp.length} · High Amt: ${high.length} · Fake Domain: ${fake.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"Fawry",records:fawryRows.length,details});const sessionId=await logUploadSession({platform:"fawry",uploaded_by:currentUser.username,record_count:fawryRows.length,high_count:high.length,mid_count:0,high_amt_count:high.length,fake_dom_count:fake.length,other_count:susp.length});if(sessionId){await logFraudAlerts(sessionId,buildFawryAlerts(high,susp,fake));await logAllTransactions(sessionId,en,"fawry");}await logAuditEntry({username:currentUser.username,action:"Import",platform:"Fawry",record_count:fawryRows.length,details});};
 
   const loadNoonFile=useCallback(async(file,type)=>{try{const rows=await parseFile(file);if(type==="noon")setNoonRaw({file,rows});else setAdminRawFile({file,rows});}catch(e){alert("Cannot read: "+e.message);}},[]);
-  const doNoonAnalyze=async()=>{if(!noonRaw||!adminRawFile)return;setNoonLoading(true);try{await refreshBlocked();const merged=mergeNoonAdmin(noonRaw.rows,adminRawFile.rows);const en=merged.map(enrichNoonRow);const fraud=filterB(detectFraud(en,"CC Details")),high=filterB(detectHighAmounts(en)),fake=filterB(detectFakeDomain(en));setNoonMerged(merged);setNoonEnriched(en);setNoonFraud(fraud);setNoonHighAmt(high);setNoonFakeDom(fake);setNoonShowRaw(false);const details=`High: ${fraud.filter(r=>r.risk==="High").length} · Mid: ${fraud.filter(r=>r.risk==="Mid").length} · High Amt: ${high.length} · Fake Domain: ${fake.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"Noon",records:merged.length,details});const sessionId=await logUploadSession({platform:"noon",uploaded_by:currentUser.username,record_count:merged.length,high_count:fraud.filter(r=>r.risk==="High").length,mid_count:fraud.filter(r=>r.risk==="Mid").length,high_amt_count:high.length,fake_dom_count:fake.length});if(sessionId){await logFraudAlerts(sessionId,[...buildCCAlerts(fraud,"noon"),...buildHighAmtAlerts(high,"noon"),...buildFakeDomAlerts(fake,"noon")]);}await logAuditEntry({username:currentUser.username,action:"Import",platform:"Noon",record_count:merged.length,details});}finally{setNoonLoading(false);}};
+  const doNoonAnalyze=async()=>{if(!noonRaw||!adminRawFile)return;setNoonLoading(true);try{await refreshBlocked();const merged=mergeNoonAdmin(noonRaw.rows,adminRawFile.rows);const en=merged.map(enrichNoonRow);const fraud=filterB(detectFraud(en,"CC Details")),high=filterB(detectHighAmounts(en)),fake=filterB(detectFakeDomain(en));setNoonMerged(merged);setNoonEnriched(en);setNoonFraud(fraud);setNoonHighAmt(high);setNoonFakeDom(fake);setNoonShowRaw(false);const details=`High: ${fraud.filter(r=>r.risk==="High").length} · Mid: ${fraud.filter(r=>r.risk==="Mid").length} · High Amt: ${high.length} · Fake Domain: ${fake.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"Noon",records:merged.length,details});const sessionId=await logUploadSession({platform:"noon",uploaded_by:currentUser.username,record_count:merged.length,high_count:fraud.filter(r=>r.risk==="High").length,mid_count:fraud.filter(r=>r.risk==="Mid").length,high_amt_count:high.length,fake_dom_count:fake.length});if(sessionId){await logFraudAlerts(sessionId,[...buildCCAlerts(fraud,"noon"),...buildHighAmtAlerts(high,"noon"),...buildFakeDomAlerts(fake,"noon")]);await logAllTransactions(sessionId,en,"noon");}await logAuditEntry({username:currentUser.username,action:"Import",platform:"Noon",record_count:merged.length,details});}finally{setNoonLoading(false);}};
   const resetNoon=()=>{setNoonRaw(null);setAdminRawFile(null);setNoonMerged([]);setNoonEnriched([]);setNoonFraud([]);setNoonHighAmt([]);setNoonFakeDom([]);};
   const resetAdmin=()=>{setAdminSheetRaw([]);setAdminEnriched([]);setAdminPayMethods([]);setAdminSuspected([]);setAdminHighAmt([]);setAdminFakeDom([]);setAdminRechargeAbusers([]);};
   const resetFawry=()=>{setFawryRaw([]);setFawryEnriched([]);setFawryHighAmt([]);setFawrySuspected([]);setFawryFakeDom([]);};
-  const doImportPromo=async()=>{await refreshBlocked();const PROMO_CARD_EXCLUDE=new Set(["VALU","TRU"]);const en=promoRows.map(enrichPromoRow).filter(r=>!PROMO_CARD_EXCLUDE.has((r._cardNum||"").toUpperCase().trim()));const highDisc=filterB(detectPromoHighDiscount(en)),sameCard=detectPromoSameCard(en),sameWallet=detectPromoSameWallet(en),fakeDom=filterB(detectPromoFakeDomain(en));setPromoRaw(promoRows);setPromoEnriched(en);setPromoHighDiscount(highDisc);setPromoSameCard(sameCard);setPromoSameWallet(sameWallet);setPromoFakeDomain(fakeDom);setPromoShowRaw(false);setPromoStep("done");const details=`High Discount: ${highDisc.length} · Same Card: ${sameCard.length} · Same Wallet: ${sameWallet.length} · Fake Domain: ${fakeDom.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"Promo",records:promoRows.length,details});const sessionId=await logUploadSession({platform:"promo",uploaded_by:currentUser.username,record_count:promoRows.length,high_count:highDisc.length,mid_count:sameCard.filter(r=>r.risk==="Mid").length+sameWallet.filter(r=>r.risk==="Mid").length,high_amt_count:0,fake_dom_count:fakeDom.length,other_count:sameCard.filter(r=>r.risk==="High").length+sameWallet.filter(r=>r.risk==="High").length});if(sessionId){await logFraudAlerts(sessionId,buildPromoAlerts(highDisc,sameCard,sameWallet,fakeDom));}await logAuditEntry({username:currentUser.username,action:"Import",platform:"Promo",record_count:promoRows.length,details});};
+  const doImportPromo=async()=>{await refreshBlocked();const PROMO_CARD_EXCLUDE=new Set(["VALU","TRU"]);const en=promoRows.map(enrichPromoRow).filter(r=>!PROMO_CARD_EXCLUDE.has((r._cardNum||"").toUpperCase().trim()));const highDisc=filterB(detectPromoHighDiscount(en)),sameCard=detectPromoSameCard(en),sameWallet=detectPromoSameWallet(en),fakeDom=filterB(detectPromoFakeDomain(en));setPromoRaw(promoRows);setPromoEnriched(en);setPromoHighDiscount(highDisc);setPromoSameCard(sameCard);setPromoSameWallet(sameWallet);setPromoFakeDomain(fakeDom);setPromoShowRaw(false);setPromoStep("done");const details=`High Discount: ${highDisc.length} · Same Card: ${sameCard.length} · Same Wallet: ${sameWallet.length} · Fake Domain: ${fakeDom.length}`;addAuditLog({user:currentUser.username,action:"Import",platform:"Promo",records:promoRows.length,details});const sessionId=await logUploadSession({platform:"promo",uploaded_by:currentUser.username,record_count:promoRows.length,high_count:highDisc.length,mid_count:sameCard.filter(r=>r.risk==="Mid").length+sameWallet.filter(r=>r.risk==="Mid").length,high_amt_count:0,fake_dom_count:fakeDom.length,other_count:sameCard.filter(r=>r.risk==="High").length+sameWallet.filter(r=>r.risk==="High").length});if(sessionId){await logFraudAlerts(sessionId,buildPromoAlerts(highDisc,sameCard,sameWallet,fakeDom));await logAllTransactions(sessionId,en,"promo");}await logAuditEntry({username:currentUser.username,action:"Import",platform:"Promo",record_count:promoRows.length,details});};
   const resetPromo=()=>{setPromoRaw([]);setPromoEnriched([]);setPromoHighDiscount([]);setPromoSameCard([]);setPromoSameWallet([]);setPromoFakeDomain([]);};
 
   const ptBadge=ptFraud.length+ptHighAmt.length+ptFakeDom.length;
@@ -704,6 +792,7 @@ export default function App(){
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(ptFraud,ptHighAmt,ptFakeDom,"PayTabs"),
     ...blockProps,
+    analysisPayload:{platform:"PayTabs",recordCount:ptRaw.length,fraud:ptFraud,highAmt:ptHighAmt,fakeDom:ptFakeDom,otherFlags:[],allStats:computeAllStats(ptEnriched)},
   };
 
   // ── Noon dashboard config ──
@@ -723,6 +812,7 @@ export default function App(){
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(noonFraud,noonHighAmt,noonFakeDom,"Noon"),
     ...blockProps,
+    analysisPayload:{platform:"Noon",recordCount:noonMerged.length,fraud:noonFraud,highAmt:noonHighAmt,fakeDom:noonFakeDom,otherFlags:[],allStats:computeAllStats(noonEnriched)},
   };
 
   // ── PayMob wallets dashboard config ──
@@ -743,6 +833,7 @@ export default function App(){
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(pmWFraud,pmWHighAmt,pmWFakeDom,"PayMob_Wallets"),
     ...blockProps,
+    analysisPayload:{platform:"PayMob Wallets",recordCount:pmRaw.length,fraud:pmWFraud,highAmt:pmWHighAmt,fakeDom:pmWFakeDom,otherFlags:pmWalletAbusers,allStats:computeAllStats(pmWEnriched)},
   };
 
   // ── PayMob BNPL config ──
@@ -759,6 +850,7 @@ export default function App(){
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>makeExcelFile(pmBFraud,pmBHighAmt,[],"PayMob_BNPL"),
     ...blockProps,
+    analysisPayload:{platform:"PayMob BNPL",recordCount:pmBEnriched.length,fraud:pmBFraud,highAmt:pmBHighAmt,fakeDom:[],otherFlags:[],allStats:computeAllStats(pmBEnriched)},
   };
 
   // ── Admin dashboard config ──
@@ -786,6 +878,7 @@ export default function App(){
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>{const wb=XLSX.utils.book_new();[["PayMethods",adminPayMethodsAdapted],["Suspected",adminSuspectedWithTxRows],["HighAmounts",adminHighAmtAdapted],["FakeDomain",adminFakeDomAdapted],["Recharge",adminRechargeAdapted]].forEach(([name,rows])=>{const data=rows.map(r=>({"Email":r.email||"—","Names":(r.custNames||[]).join(", ")||"—","CC/Method/ID":(r.uniqueCCs||[]).join(", ")||"—","Total":r.totalAmt||0,"Reason":(r.reasons||[]).join(" | ")}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`Admin_Fraud_${new Date().toISOString().split("T")[0]}.xlsx`);},
     ...blockProps,
+    analysisPayload:{platform:"Admin",recordCount:adminSheetRaw.length,fraud:adminPayMethodsAdapted,highAmt:adminHighAmtAdapted,fakeDom:adminFakeDomAdapted,otherFlags:[...adminSuspectedWithTxRows,...adminRechargeAdapted],allStats:computeAllStats(adminEnriched)},
   };
 
   // ── Fawry dashboard config ──
@@ -854,6 +947,7 @@ export default function App(){
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>{const wb=XLSX.utils.book_new();[["Suspected",fawrySuspected],["HighAmounts",fawryHighAmt],["FakeDomain",fawryFakeDom]].forEach(([name,rows])=>{const data=rows.map(r=>({"Email":r.email||"—","Names":(r.custNames||[]).join(", ")||"—","Tx Count":r.txCount,"Total (EGP)":r.totalAmt||0,"Reason":(r.reasons||[]).join(" | ")}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`Fawry_Fraud_${new Date().toISOString().split("T")[0]}.xlsx`);},
     ...blockProps,
+    analysisPayload:{platform:"Fawry",recordCount:fawryRaw.length,fraud:[],highAmt:fawryHighAmt,fakeDom:fawryFakeDom,otherFlags:fawrySuspected,allStats:computeAllStats(fawryEnriched)},
   };
 
   // ── Promo dashboard config ──
@@ -872,6 +966,7 @@ export default function App(){
     previewKeyFn:(row,col)=>getCol(row)(col)||"—",
     onDownload:()=>{const wb=XLSX.utils.book_new();[["HighDiscount",promoHighDiscount],["SameCard",promoSameCard],["SameWallet",promoSameWallet],["FakeDomain",promoFakeDomain]].forEach(([name,rows])=>{const data=rows.map(r=>({"Email":r.email||r.card||r.wallet||"—","Names":(r.custNames||[]).join(", ")||"—","Promo Codes":(r.promoCodes||[]).join(", ")||"—","Discount (EGP)":r.totalDiscount||0,"Tx Count":r.txCount,"Reason":(r.reasons||[]).join(" | ")}));const ws=XLSX.utils.json_to_sheet(data.length>0?data:[{}]);XLSX.utils.book_append_sheet(wb,ws,name);});XLSX.writeFile(wb,`Promo_Abuse_${new Date().toISOString().split("T")[0]}.xlsx`);},
     ...blockProps,
+    analysisPayload:{platform:"Promo",recordCount:promoRaw.length,fraud:[],highAmt:[],fakeDom:promoFakeDomain,otherFlags:[...promoHighDiscount,...promoSameCard,...promoSameWallet],allStats:computeAllStats(promoEnriched,"_discountAmt")},
   };
 
   // ── Empty state component ──

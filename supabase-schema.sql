@@ -145,6 +145,26 @@ CREATE TABLE IF NOT EXISTS blocked_entities (
 CREATE INDEX IF NOT EXISTS idx_blocked_entities_value
   ON blocked_entities(entity_value);
 
+-- ── 7. ALL_TRANSACTIONS ─────────────────────────────────────────────────────
+-- Aggregated per-email transaction totals for EVERY upload (not just flagged).
+-- Powers Option B RAG: Claude sees lifetime clean transaction history alongside
+-- fraud alerts, so it can distinguish first-time vs. established customers.
+CREATE TABLE IF NOT EXISTS all_transactions (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  upload_session_id UUID        NOT NULL REFERENCES upload_sessions(id) ON DELETE CASCADE,
+  platform          TEXT        NOT NULL,
+  entity_email      TEXT        NOT NULL,
+  amount            NUMERIC(14,2) NOT NULL DEFAULT 0,
+  transaction_count INTEGER     NOT NULL DEFAULT 1,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_all_transactions_email
+  ON all_transactions(entity_email);
+
+CREATE INDEX IF NOT EXISTS idx_all_transactions_platform_created
+  ON all_transactions(platform, created_at DESC);
+
 -- ── SEED: initial app users ─────────────────────────────────────
 -- Passwords below are PLAINTEXT placeholders.
 -- Replace password_hash values with bcrypt hashes before going live,

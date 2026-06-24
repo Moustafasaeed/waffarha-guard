@@ -469,6 +469,41 @@ export function buildPromoAlerts(
   ];
 }
 
+// ── logAllTransactions ─────────────────────────────────────────────────────────
+// Stores aggregated per-email transaction data for ALL records in an upload
+// (not just flagged ones). Powers Option B RAG: Claude can see clean history.
+export async function logAllTransactions(
+  sessionId: string,
+  enriched: any[],
+  platform: Platform
+) {
+  if (!sessionId || !enriched.length) return;
+
+  const byEmail: Record<string, { amount: number; count: number }> = {};
+  enriched.forEach((r) => {
+    const email = (r._email || r.email || "").toLowerCase().trim();
+    if (!email || email === "n/a" || email === "-") return;
+    if (!byEmail[email]) byEmail[email] = { amount: 0, count: 0 };
+    byEmail[email].amount += r._amt || r._discountAmt || 0;
+    byEmail[email].count += 1;
+  });
+
+  const rows = Object.entries(byEmail).map(([email, { amount, count }]) => ({
+    upload_session_id: sessionId,
+    platform,
+    entity_email: email,
+    amount: Math.round(amount * 100) / 100,
+    transaction_count: count,
+  }));
+
+  if (!rows.length) return;
+
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await supabase.from("all_transactions").insert(rows.slice(i, i + 500));
+    if (error) console.error("[Supabase] logAllTransactions error:", error.message);
+  }
+}
+
 export function buildFawryAlerts(
   highAmt: any[],
   suspected: any[],
