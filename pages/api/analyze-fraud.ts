@@ -1,5 +1,9 @@
 // @ts-nocheck
 import type { NextApiRequest, NextApiResponse } from "next";
+
+export const config = {
+  api: { bodyParser: { sizeLimit: "10mb" } },
+};
 import {
   getHistoricalContext,
   buildHistoricalContextString,
