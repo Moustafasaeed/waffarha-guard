@@ -1,10 +1,12 @@
 // @ts-nocheck
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+  );
+}
 
 export interface HistoricalAlert {
   entity_email: string | null;
@@ -40,6 +42,7 @@ export async function getHistoricalContext(
   }
 
   const emailSlice = emails.slice(0, 50);
+  const supabase = getSupabase();
 
   const [fraudResult, cleanResult] = await Promise.all([
     supabase

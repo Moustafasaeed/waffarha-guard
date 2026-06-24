@@ -13,6 +13,7 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  try {
   const {
     platform,
     recordCount,
@@ -188,7 +189,12 @@ Respond with this exact JSON:
       },
     });
   } catch (err: any) {
-    console.error("[analyze-fraud API]", err);
+    console.error("[analyze-fraud API] inner:", err);
     return res.status(500).json({ error: err.message ?? "Claude API error" });
+  }
+
+  } catch (err: any) {
+    console.error("[analyze-fraud API] outer:", err);
+    return res.status(500).json({ error: err.message ?? "Unexpected server error" });
   }
 }
