@@ -1,12 +1,9 @@
 // @ts-nocheck
 import type { NextApiRequest, NextApiResponse } from "next";
-import Anthropic from "@anthropic-ai/sdk";
 import {
   getHistoricalContext,
   buildHistoricalContextString,
 } from "../../lib/claude-analysis";
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export default async function handler(
   req: NextApiRequest,
@@ -139,16 +136,30 @@ Respond with this exact JSON:
 }`;
 
   try {
-    const message = await client.messages.create({
-      model: "claude-opus-4-8",
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
+    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": process.env.ANTHROPIC_API_KEY || "",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        max_tokens: 2048,
+        thinking: { type: "adaptive" },
+        system: systemPrompt,
+        messages: [{ role: "user", content: userMessage }],
+      }),
     });
 
-    const textBlock = message.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
+    if (!claudeRes.ok) {
+      const errBody = await claudeRes.text();
+      return res.status(500).json({ error: `Anthropic API error ${claudeRes.status}: ${errBody}` });
+    }
+
+    const claudeData = await claudeRes.json();
+    const textBlock = (claudeData.content || []).find((b: any) => b.type === "text");
+    if (!textBlock) {
       return res.status(500).json({ error: "No text in Claude response" });
     }
 
