@@ -34,6 +34,41 @@ export interface HistoricalContext {
   cleanHistory: Record<string, CleanHistory>;
 }
 
+export async function getSessionData(sessionId: string) {
+  const supabase = getSupabase();
+  const [sessionRes, alertsRes, txRes] = await Promise.all([
+    supabase.from("upload_sessions").select("*").eq("id", sessionId).single(),
+    supabase.from("fraud_alerts").select("*").eq("upload_session_id", sessionId).order("risk_level"),
+    supabase.from("all_transactions").select("entity_email, amount, transaction_count").eq("upload_session_id", sessionId),
+  ]);
+
+  const session = sessionRes.data;
+  const alerts: any[] = alertsRes.data ?? [];
+  const transactions: any[] = txRes.data ?? [];
+
+  const amounts = transactions.map((r: any) => Number(r.amount) || 0).filter((a: number) => a > 0).sort((a: number, b: number) => a - b);
+  const emails = transactions.map((r: any) => r.entity_email).filter(Boolean) as string[];
+  const uniqueEmails = new Set(emails);
+  const domains: Record<string, number> = {};
+  emails.forEach((e: string) => { const d = e.split("@")[1] || "unknown"; domains[d] = (domains[d] || 0) + 1; });
+  const topDomains = Object.entries(domains).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([d, c]) => `${d}(${c})`);
+  const pct = (arr: number[], p: number) => arr.length ? arr[Math.floor((arr.length - 1) * p / 100)] : 0;
+
+  const allStats = {
+    totalRecords: session?.record_count ?? transactions.length,
+    uniqueEmails: uniqueEmails.size,
+    totalAmount: Math.round(amounts.reduce((s: number, a: number) => s + a, 0)),
+    amountP50: Math.round(pct(amounts, 50)),
+    amountP90: Math.round(pct(amounts, 90)),
+    amountP99: Math.round(pct(amounts, 99)),
+    maxAmount: amounts.length ? amounts[amounts.length - 1] : 0,
+    topDomains,
+    zeroAmountCount: transactions.filter((r: any) => !r.amount || r.amount === 0).length,
+  };
+
+  return { session, alerts, allStats };
+}
+
 export async function getHistoricalContext(
   emails: string[]
 ): Promise<HistoricalContext> {
